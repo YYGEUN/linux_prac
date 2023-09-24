@@ -1,0 +1,361 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/procfs.h>
+#include <sys/sem.h>
+
+#define NUM_SEM			2 /// 하나의키에 두개의 세마포어 최대 255개세마포어
+#define ROUNDUP(x)	(((x) + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1))
+
+struct mydata {
+	int pid;
+	int counter;
+	char warning[256];
+};
+
+
+///// ---------------------------- sema ---------------------------------
+static int init_semaphore(void)
+{
+	key_t key = 7700;
+	int semid;
+	semid = semget(key, NUM_SEM, IPC_CREAT | 0666);
+	if (semid == -1) {
+		perror("semget()");
+		return -1;
+	}
+
+	return semid;
+}
+
+static int sem_sysv_init(int sem_id)
+{
+	semctl(sem_id, 0, SETVAL, 1);	/* binary semaphore */ //1프로세스 접속 가능
+	semctl(sem_id, 1, SETVAL, 3);	//* counting semaphore */ 3은 3까지 카운팅 3프로세스접속 가능
+	return 0;
+}
+
+static int sem_sysv_show(int sem_id)
+{
+	int i;
+
+	for (i = 0; i < NUM_SEM; i++) {
+		printf("semaphore[%d] = %d\n", i, semctl(sem_id, i, GETVAL));
+	}
+
+	return 0;
+}
+
+static int sem_sysv_get(int sem_id, int sem_idx)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_num = sem_idx;
+	buf.sem_op = -1;
+	semop(sem_id, &buf, 1);
+	printf("locked\n");
+
+	return 0;
+}
+
+static int sem_sysv_release(int sem_id, int sem_idx)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_num = sem_idx;
+	buf.sem_op = 1;
+	semop(sem_id, &buf, 1);
+	printf("unlocked\n");
+
+	return 0;
+}
+
+static int sem_sysv_wait0(int sem_id, int sem_idx)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_num = sem_idx;
+	buf.sem_op = 0;
+	semop(sem_id, &buf, 1);
+
+	return 0;
+}
+///// ---------------------------- sema ---------------------------------
+
+
+
+///// ------------------------------ file i/0 ------------------------------------
+void filew(void)
+{
+	key_t key = 7700;
+	size_t size;
+	int shmid;
+	struct mydata *info;      
+	int fd,n;
+	size = ROUNDUP(sizeof(struct mydata));
+
+
+	fd=open("log.txt",O_CREAT|O_RDWR|O_TRUNC, 0666);     
+	if(fd<0){                 
+		printf("i/o file open error\n");                 
+		exit(1);         
+	}    
+
+	FILE *fdfile = fdopen(fd,"w");
+	if (fdfile == NULL) {
+    perror("fdopen");
+    exit(1);
+	}
+
+	shmid = shmget(key, size, IPC_CREAT | 0666);
+	if (shmid == -1) {
+		perror("i/o shmget()");
+		return;
+	}
+
+	info = shmat(shmid, NULL, 0);
+	if (info == (void *)-1) {
+		perror("i/o shmat()");
+		return;
+	}
+
+	if(info->counter > 3)
+	{
+		fprintf(fdfile, "%d\n", info->counter);
+		fprintf(fdfile, "%d\n", info->pid);
+		fprintf(fdfile, "%s", "warning");
+	}
+	else
+	{
+		fprintf(fdfile, "%d\n", info->counter);
+		fprintf(fdfile, "%d", info->pid);
+	}
+
+	fclose(fdfile);
+	
+	return;
+}
+
+
+void filer(void)
+{
+	key_t key = 7700;
+	size_t size;
+	int shmid;
+	struct mydata *info;      
+	int fd,n;
+	int n1;
+	char buffer[256];
+	size = ROUNDUP(sizeof(struct mydata));
+
+
+	fd=open("log.txt",O_RDONLY);     
+	if(fd<0){                 
+		printf("i/o file open error\n");                 
+		exit(1);         
+	}    
+
+	FILE *fdfile = fdopen(fd,"r");
+	if (fdfile == NULL) {
+    perror("fdopen");
+    exit(1);
+	}
+
+	shmid = shmget(key, size, IPC_CREAT | 0666);
+	if (shmid == -1) {
+		perror("i/o shmget()");
+		return;
+	}
+
+	info = shmat(shmid, NULL, 0);
+	if (info == (void *)-1) {
+		perror("i/o shmat()");
+		return;
+	}
+
+	while(fgets(buffer,10,fdfile)) // buffer in size 10 from fdfile
+	{
+		// if(strstr(buffer,"warning")) // find same with 2 string
+		// {
+		// 	printf("danger!!!\n");
+		// }
+		printf("%s",buffer);
+		if(buffer == "warning") // find same with 2 string
+		{
+			printf("danger!!!\n");
+		}
+	}
+
+	fclose(fdfile);
+	
+	return;
+}
+///// ------------------------------ file i/0 ------------------------------------
+
+
+
+
+
+///// ---------------------------- shared memory ---------------------------------
+
+static int view(int sem_id)
+{
+	int n;
+	key_t key = 7700;
+	size_t size;
+	int shmid;
+	struct mydata local;
+	struct mydata *info;
+
+	size = ROUNDUP(sizeof(struct mydata));
+	shmid = shmget(key, size, IPC_CREAT | 0666); //생성혹은 생성된거 불러옴
+	if (shmid == -1) {
+		perror("shmget()");
+		return -1;
+	}
+
+	info = shmat(shmid, NULL, 0);
+	if (info == (void *)-1) {
+		perror("shmat()");
+		return -1;
+	}
+	memset(info, 0, sizeof(struct mydata)); //<-- 기동시 늘 초기화 (고민해서 써야함)
+
+	/* view */
+	memset(&local, 0, sizeof(local));
+	n = 0;
+	while (1) 
+	{
+		if (memcmp(info, &local, sizeof(struct mydata))) //mem cmp는 info , local 의 3번쨰인자크기만큼 비교해서 얼마나다른지 
+																										//즉 입력이 없으면 if문 통과하지않음
+		{
+			sem_sysv_get(sem_id, 0);
+			printf("pid = %d, counter = %d\n",
+					info->pid, info->counter);
+			memcpy(&local, info, sizeof(struct mydata));
+			filew();
+			filer();
+			sem_sysv_release(sem_id, 0);
+		}
+		sleep(1);
+	}
+	shmdt(info);
+
+	return 0;
+}
+
+static int set(void)
+{
+	key_t key = 7700;
+	size_t size;
+	int shmid;
+	struct mydata *info;
+
+	size = ROUNDUP(sizeof(struct mydata));
+	shmid = shmget(key, size, IPC_CREAT | 0666);
+	if (shmid == -1) {
+		perror("shmget()");
+		return -1;
+	}
+
+	info = shmat(shmid, NULL, 0);
+	if (info == (void *)-1) {
+		perror("shmat()");
+		return -1;
+	}
+
+	info->pid = getpid();
+	info->counter++;
+	shmdt(info);
+
+	return 0;
+}
+
+static int set2(void)
+{
+	key_t key = 7700;
+	size_t size;
+	int shmid;
+	struct mydata *info;
+
+	size = ROUNDUP(sizeof(struct mydata));
+	shmid = shmget(key, size, IPC_CREAT | 0666);
+	if (shmid == -1) {
+		perror("shmget()");
+		return -1;
+	}
+
+	info = shmat(shmid, NULL, 0);
+	if (info == (void *)-1) {
+		perror("shmat()");
+		return -1;
+	}
+
+	info->pid = getpid();
+	info->counter += 5;
+
+	shmdt(info);
+
+	return 0;
+}
+///// ---------------------------- shared memory ---------------------------------
+
+
+
+int main(int argc, char **argv)
+{
+	int viewmode = 0;
+  int sem_id;
+	int sem_idx;
+	int ret;
+
+
+///// ---------------------------- sema(main) ---------------------------------
+	sem_id = init_semaphore();
+	if (sem_id == -1) {
+		perror("init_semaphore()");
+		return -1;
+	}
+	else
+	{
+		ret = sem_sysv_init(sem_id);
+	}
+
+	if (!strcmp(argv[1], "show")) {
+		ret = sem_sysv_show(sem_id);
+	}
+///// ---------------------------- sema(main) ---------------------------------
+
+
+///// ---------------------------- shared memory(main) ---------------------------------
+	else if(!strcmp(argv[1], "set"))
+	{
+		sem_sysv_get(sem_id, 0);
+		set();
+		sem_sysv_release(sem_id, 0);
+	}
+	else if(!strcmp(argv[1], "set2"))
+	{
+		sem_sysv_get(sem_id, 0);
+		set2();
+		sem_sysv_release(sem_id, 0);
+	}
+	else if(!strcmp(argv[1], "view")) 
+	{
+		view(sem_id);
+	}
+///// ---------------------------- shared memory(main) ---------------------------------
+ 
+	
+	return 0;
+}
