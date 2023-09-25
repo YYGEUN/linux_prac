@@ -22,12 +22,15 @@
 void error_handling(char* message);
 
 int total_speed=0;
+char state[1024];
+int ac=0;
+int br=0;
+int speed = 0; 
 
 struct mydata {
 	int pid;
   int type;
 	int rotatevalue;
-  int speed;
 	char msg[256];
 };
 
@@ -36,8 +39,6 @@ typedef struct {
   int* speed;
 	char* message;
 }recv_data;
-
-int speed = 0; 
 
 void increase_speed() {
     speed += 3;
@@ -62,35 +63,35 @@ void* send_function(void* clnt_sock){
 
 void* receive_function(void* rcvdt){
 	recv_data* data =(recv_data*)rcvdt;
-  int ac=0;
-  int br=0;
 	while(1){
 		int str_len=read(*(data->clnt_sock),data->message,sizeof(char)*30);
+		strcpy(state,data->message);
     printf("\n <- client : %s\n",data->message);
-    while(1)
-    {
-      if (strcmp("acin", data->message) == 0) ac = 1;
-      else if (strcmp("brin", data->message) == 0) br = 1;
-      else if (strcmp("acout", data->message) == 0) ac = 0;
-      else if (strcmp("brout", data->message) == 0) br = 0;
-
-      if(ac == 1)
-      {
-        sleep(1);
-        increase_speed();
-      }
-      if(br == 1)
-      {
-        sleep(1);
-        decrease_speed();
-      }
-      if(br == 0 && ac == 0)
-      {
-        sleep(1);
-        decrease_speed();
-      }
-    }
   }
+}
+
+void* receive_function2(void* rcvdt){
+	recv_data* data =(recv_data*)rcvdt;
+	while(1)
+	{
+		// sleep(1);
+		// printf("%s\n",state);
+		if(strcmp(state,"ac") == 0)
+		{
+			sleep(1);
+			increase_speed();
+		}
+		if(strcmp(state,"br") == 0)
+		{
+			sleep(1);
+			decrease_speed();
+		}
+		if(strcmp(state,"nope") == 0)
+		{
+			sleep(1);
+			decrease_speed();
+		}
+	}
 }
 
 
@@ -141,15 +142,17 @@ int main(int argc, char *argv[]) {
 
 
 
-  pthread_t p_thread[2];	
+  pthread_t p_thread[3];	
   int t;
-  for(t=0;t<2;t++){
+  for(t=0;t<3;t++){
     if(t==0) pthread_create(&p_thread[t],NULL,send_function,(void*)&client_socket);
     else if(t==1)pthread_create(&p_thread[t],NULL,receive_function,(void*)&rcvdt);
+    else if(t==2)pthread_create(&p_thread[t],NULL,receive_function2,(void*)&rcvdt);
   }
       
   pthread_join(p_thread[0],(void **)&status);
   pthread_join(p_thread[1],(void **)&status);
+	pthread_join(p_thread[2],(void **)&status);
 
   close(client_socket);
   close(server_socket);
