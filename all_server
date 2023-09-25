@@ -15,394 +15,154 @@
 #include <sys/socket.h>
 #include <pthread.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 #define MAXLINE 1024
-#define NUM_SEM			2 /// 하나의키에 두개의 세마포어 최대 255개세마포어
-#define ROUNDUP(x)	(((x) + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1))
+
+void error_handling(char* message);
+
+int total_speed=0;
 
 struct mydata {
 	int pid;
-	int counter;
-	char messeage[256];
+  int type;
+	int rotatevalue;
+  int speed;
+	char msg[256];
 };
 
+typedef struct {
+	int* clnt_sock;
+  int* speed;
+	char* message;
+}recv_data;
 
+int speed = 0; 
 
-///// ---------------------------- shared memory ---------------------------------
-static int view(int sem_id)
-{
-	int n;
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata local;
-	struct mydata *info;
-
-	size = ROUNDUP(sizeof(struct mydata));
-	shmid = shmget(key, size, IPC_CREAT | 0666); //생성혹은 생성된거 불러옴
-	if (shmid == -1) {
-		perror("shmget()");
-		return -1;
-	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("shmat()");
-		return -1;
-	}
-	memset(info, 0, sizeof(struct mydata)); //<-- 기동시 늘 초기화 (고민해서 써야함)
-
-	/* view */
-	memset(&local, 0, sizeof(local));
-	n = 0;
-	while (1) 
-	{
-		if (memcmp(info, &local, sizeof(struct mydata))) //mem cmp는 info , local 의 3번쨰인자크기만큼 비교해서 얼마나다른지 
-																										//즉 입력이 없으면 if문 통과하지않음
-		{
-			printf("pid = %d, counter = %d\n",
-					info->pid, info->counter);
-			memcpy(&local, info, sizeof(struct mydata));
-		}
-		sleep(1);
-	}
-	shmdt(info);
-
-	return 0;
+void increase_speed() {
+    speed += 3;
+    printf("Speed increased to %d\n", speed);
 }
 
-static int set(void)
-{
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata *info;
-
-	size = ROUNDUP(sizeof(struct mydata));
-	shmid = shmget(key, size, IPC_CREAT | 0666);
-	if (shmid == -1) {
-		perror("shmget()");
-		return -1;
-	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("shmat()");
-		return -1;
-	}
-
-	info->pid = getpid();
-	info->counter++;
-	shmdt(info);
-
-	return 0;
+void decrease_speed() {
+    speed -= 3;
+    printf("Speed decreased to %d\n", speed);
 }
 
-static int set2(void)
-{
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata *info;
-
-	size = ROUNDUP(sizeof(struct mydata));
-	shmid = shmget(key, size, IPC_CREAT | 0666);
-	if (shmid == -1) {
-		perror("shmget()");
-		return -1;
+void* send_function(void* clnt_sock){
+	int* cs=(int*)clnt_sock;	
+	while(1){
+		char message[30];
+    int num[30];
+		printf("\nserver -> : ");
+		scanf("%d",num);
+		write(*cs,num,sizeof(num));
 	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("shmat()");
-		return -1;
-	}
-
-	info->pid = getpid();
-	info->counter += 5;
-
-	shmdt(info);
-
-	return 0;
-}
-///// ---------------------------- shared memory ---------------------------------
-
-
-///// ------------------------------ file i/0 ------------------------------------
-void filew(void)
-{
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata *info;      
-	int fd,n;
-	size = ROUNDUP(sizeof(struct mydata));
-    char filename[20];
-    
-    // 클라이언트의 PID를 이름으로 가진 파일 생성
-    snprintf(filename, sizeof(filename), "log%d.txt", getpid());
-	fd=open(filename,O_CREAT|O_RDWR|O_TRUNC, 0666);     
-
-	if(fd<0){                 
-		printf("i/o file open error\n");                 
-		exit(1);         
-	}    
-
-	FILE *fdfile = fdopen(fd,"w");
-	if (fdfile == NULL) {
-    perror("fdopen");
-    exit(1);
-	}
-
-	shmid = shmget(key, size, IPC_CREAT | 0666);
-	if (shmid == -1) {
-		perror("i/o shmget()");
-		return;
-	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("i/o shmat()");
-		return;
-	}
-
-	fprintf(fdfile, "%s", info->messeage);
-    fprintf(fdfile, "%d", info->pid);
-
-	fclose(fdfile);
-	
-	return;
 }
 
-void filer(int pid)
-{
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata *info;      
-	int fd,n;
-	int n1;
-	char buffer[256];
-    char filename[20];
-	size = ROUNDUP(sizeof(struct mydata));
+void* receive_function(void* rcvdt){
+	recv_data* data =(recv_data*)rcvdt;
+  int ac=0;
+  int br=0;
+	while(1){
+		int str_len=read(*(data->clnt_sock),data->message,sizeof(char)*30);
+    printf("\n <- client : %s\n",data->message);
+    while(1)
+    {
+      if (strcmp("acin", data->message) == 0) ac = 1;
+      else if (strcmp("brin", data->message) == 0) br = 1;
+      else if (strcmp("acout", data->message) == 0) ac = 0;
+      else if (strcmp("brout", data->message) == 0) br = 0;
 
-    snprintf(filename, sizeof(filename), "log%d.txt", pid);
-	fd=open(filename,O_RDONLY);     
-	if(fd<0){                 
-		printf("i/o file open error\n");                 
-		exit(1);         
-	}    
-
-	FILE *fdfile = fdopen(fd,"r");
-	if (fdfile == NULL) {
-    perror("fdopen");
-    exit(1);
-	}
-
-	shmid = shmget(key, size, IPC_CREAT | 0666);
-	if (shmid == -1) {
-		perror("i/o shmget()");
-		return;
-	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("i/o shmat()");
-		return;
-	}
-
-	while(fgets(buffer,10,fdfile)) // buffer in size 10 from fdfile
-	{
-		printf("%s",buffer);
-	}
-
-	fclose(fdfile);
-	
-	return;
-}
-///// ------------------------------ file i/0 ------------------------------------
-
-///// ---------------------------- sema ---------------------------------
-static int init_semaphore(void)
-{
-	key_t key = 7700;
-	int semid;
-	semid = semget(key, NUM_SEM, IPC_CREAT | 0666);
-	if (semid == -1) {
-		perror("semget()");
-		return -1;
-	}
-
-	return semid;
+      if(ac == 1)
+      {
+        sleep(1);
+        increase_speed();
+      }
+      if(br == 1)
+      {
+        sleep(1);
+        decrease_speed();
+      }
+      if(br == 0 && ac == 0)
+      {
+        sleep(1);
+        decrease_speed();
+      }
+    }
+  }
 }
 
-static int sem_sysv_init(int sem_id)
-{
-	semctl(sem_id, 0, SETVAL, 1);	/* binary semaphore */ //1프로세스 접속 가능
-	semctl(sem_id, 1, SETVAL, 3);	//* counting semaphore */ 3은 3까지 카운팅 3프로세스접속 가능
-	return 0;
-}
 
-static int sem_sysv_show(int sem_id)
-{
-	int i;
-
-	for (i = 0; i < NUM_SEM; i++) {
-		printf("semaphore[%d] = %d\n", i, semctl(sem_id, i, GETVAL));
-	}
-
-	return 0;
-}
-
-static int sem_sysv_get(int sem_id, int sem_idx)
-{
-	struct sembuf buf;
-
-	memset(&buf, 0, sizeof(buf));
-	buf.sem_num = sem_idx;
-	buf.sem_op = -1;
-	semop(sem_id, &buf, 1);
-	printf("locked\n");
-
-	return 0;
-}
-
-static int sem_sysv_release(int sem_id, int sem_idx)
-{
-	struct sembuf buf;
-
-	memset(&buf, 0, sizeof(buf));
-	buf.sem_num = sem_idx;
-	buf.sem_op = 1;
-	semop(sem_id, &buf, 1);
-	printf("unlocked\n");
-
-	return 0;
-}
-
-static int sem_sysv_wait0(int sem_id, int sem_idx)
-{
-	struct sembuf buf;
-
-	memset(&buf, 0, sizeof(buf));
-	buf.sem_num = sem_idx;
-	buf.sem_op = 0;
-	semop(sem_id, &buf, 1);
-
-	return 0;
-}
-///// ---------------------------- sema ---------------------------------
-
-///////////////////////////////////////// main ////////////////////////////////////////////////
 int main(int argc, char *argv[]) {
-	int server_fd, client_fd, status;
-    pid_t pid;
-    socklen_t addrlen;
-    int readn;
-    char buf[MAXLINE];
-    char message[MAXLINE];
-    struct sockaddr_in client_addr, server_addr;
-    
+	int server_socket, client_socket, status;
+  pid_t pid;
+  socklen_t addrlen;
+  int readn;
+  int speed[MAXLINE];
+  char buf[MAXLINE];
+  char message[MAXLINE];
+  struct sockaddr_in client_addr, server_addr;
 
-	key_t key = 7700;
-	size_t size;
-	int shmid;
-	struct mydata local;
-	struct mydata *info;
-
-	size = ROUNDUP(sizeof(struct mydata));
-	shmid = shmget(key, size, IPC_CREAT | 0666); //생성혹은 생성된거 불러옴
-	if (shmid == -1) {
-		perror("shmget()");
-		return -1;
-	}
-
-	info = shmat(shmid, NULL, 0);
-	if (info == (void *)-1) {
-		perror("shmat()");
-		return -1;
-	}
-	// memset(info, 0, sizeof(struct mydata)); //<-- 기동시 늘 초기화 (고민해서 써야함)
-
-	memset(&local, 0, sizeof(local));
-
-    int sem_id;
-	int sem_idx;
-	int ret;
-
-///// ---------------------------- sema(main) ---------------------------------
-	sem_id = init_semaphore();
-	if (sem_id == -1) {
-		perror("init_semaphore()");
-		return -1;
-	}
-///// ---------------------------- sema(main) ---------------------------------
-
-    if((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+  if((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     	return 1;
-	if(server_fd==-1){
+	if(server_socket==-1){
 		perror("socket() error");	
 	}
-
     memset((void *)&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     server_addr.sin_port = htons(atoi(argv[1]));
 
-	if(bind(server_fd,(struct sockaddr*) &server_addr,sizeof(server_addr))==-1){
+	if(bind(server_socket,(struct sockaddr*) &server_addr,sizeof(server_addr))==-1){
 		perror("bind() error");
 	}
 
-    if(listen(server_fd, 5) == -1) {
+    if(listen(server_socket, 5) == -1) {
     	perror("listen error");
         return 1;
     }
     
 
-    printf("신호대기중 .....\n");
-    // signal(SIGCHLD, SIG_IGN);
-    
-    while(1) {
-    	addrlen = sizeof(client_addr);
-        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &addrlen);
-        if(client_fd == -1) {
-        	printf("accept error\n");
-            break;
-        }
-        printf("------ 연결성공 -----\n");
+  printf("신호대기중 .....\n");
+  // signal(SIGCHLD, SIG_IGN);
 
-        pid = fork();
+  addrlen = sizeof(client_addr);
+  client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addrlen);
+  if(client_socket == -1) {
+    perror("accept error\n");
+  }
+  printf("------ 연결성공 -----\n");
 
-        if(pid == 0) {
-        	memset(buf, 0, MAXLINE);
-            while((readn = read(client_fd, buf, MAXLINE)) > 0) 
-            {
-                // sem_sysv_get(sem_id,0); // 세마포어 작동시 멈춤 why??
-                strcpy(info->messeage, buf);
-                info->pid = getpid();
-                filew();
-                // filer();
-                printf("Read Data from %d : %s", getpid(), buf);
-                write(client_fd, buf, strlen(buf));
-                memset(buf, 0, MAXLINE);
-                // sem_sysv_release(sem_id,0);
-            }
-            printf("연결종료 pid : %d\n",getpid());
-            close(client_fd);
-            return 0;
-        }
-        else if(pid > 0)
-        {
-            int cpid;
-            cpid = waitpid(pid,&status,0);
-            filer(cpid); // cpid에는 종료된 자식프로세스 pid들어옴
-        }
-        else
-        {
-            perror("fork error");
-        }
+  recv_data rcvdt;
+  rcvdt.clnt_sock=&client_socket;
+  rcvdt.message=message;
+  rcvdt.speed=speed;
 
-	}
-    close(server_fd);
-    return 0;
+
+
+  pthread_t p_thread[2];	
+  int t;
+  for(t=0;t<2;t++){
+    if(t==0) pthread_create(&p_thread[t],NULL,send_function,(void*)&client_socket);
+    else if(t==1)pthread_create(&p_thread[t],NULL,receive_function,(void*)&rcvdt);
+  }
+      
+  pthread_join(p_thread[0],(void **)&status);
+  pthread_join(p_thread[1],(void **)&status);
+
+  close(client_socket);
+  close(server_socket);
+  
+
+  return 0;
+}
+
+
+
+void error_handling(char* message)
+{
+	fputs(message,stderr);
+	fputc('\n',stderr);
+	exit(1);
 }
