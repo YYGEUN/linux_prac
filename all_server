@@ -16,8 +16,13 @@
 #include <pthread.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <time.h> //C언어
 
 #define MAXLINE 1024
+#define MAXSPEED 230
+#define MINSPEED 3
+#define SPEEDCHANGE_V 3
+// 192.168.50.31
 
 void error_handling(char* message);
 
@@ -41,12 +46,12 @@ typedef struct {
 }recv_data;
 
 void increase_speed() {
-    speed += 3;
+    speed += SPEEDCHANGE_V;
     printf("Speed increased to %d\n", speed);
 }
 
 void decrease_speed() {
-    speed -= 3;
+    speed -= SPEEDCHANGE_V;
     printf("Speed decreased to %d\n", speed);
 }
 
@@ -63,10 +68,52 @@ void* send_function(void* clnt_sock){
 
 void* receive_function(void* rcvdt){
 	recv_data* data =(recv_data*)rcvdt;
+
+  int n,fd,status;
+  int fipeline[2];
+  pid_t pid;
+	if (pipe(fipeline)) {
+		perror("pipe()");
+	}
+
+  fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
+  if(fd<0){                 
+    printf("file open error\n");                     
+  }    
+  FILE *fdfile = fdopen(fd,"w");
+  if (fdfile == NULL) {
+    perror("fdopen");
+  }
+
 	while(1){
 		int str_len=read(*(data->clnt_sock),data->message,sizeof(char)*30);
-		strcpy(state,data->message);
-    printf("\n <- client : %s\n",data->message);
+    if(strcmp(data->message,state))
+    {
+      printf("\n바뀌었습니다. 저장을 진행합니다.\n");
+      strcpy(state,data->message);
+      printf("\n <- client : %s\n",data->message);
+
+      time_t timer;
+      struct tm* t;
+      timer = time(NULL);
+      t = localtime(&timer);
+
+      pid = fork();
+      if(pid < 0)
+      {
+        perror("fork error");
+      }
+      else if(pid == 0)
+      {
+        fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,state);
+        return 0;
+      }
+      else
+      {
+        write(fipeline[1],state,sizeof(state));
+        pid = wait(&status);
+      }
+    }
   }
 }
 
@@ -79,17 +126,17 @@ void* receive_function2(void* rcvdt){
 		if(strcmp(state,"ac") == 0)
 		{
 			sleep(1);
-			increase_speed();
+      if(speed < MAXSPEED) increase_speed();
 		}
 		if(strcmp(state,"br") == 0)
 		{
 			sleep(1);
-			decrease_speed();
+			if(speed >= MINSPEED) decrease_speed();
 		}
 		if(strcmp(state,"nope") == 0)
 		{
 			sleep(1);
-			decrease_speed();
+			if(speed >= MINSPEED) decrease_speed();
 		}
 	}
 }
