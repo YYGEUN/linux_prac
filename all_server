@@ -31,6 +31,7 @@ char state[1024];
 int ac=0;
 int br=0;
 int speed = 0; 
+int number = 0;
 
 struct mydata {
 	int pid;
@@ -55,14 +56,18 @@ void decrease_speed() {
     printf("Speed decreased to %d\n", speed);
 }
 
+void decrease_speed2() {
+    speed -= SPEEDCHANGE_V*2;
+    printf("Speed decreased to %d\n", speed);
+}
+
 void* send_function(void* clnt_sock){
 	int* cs=(int*)clnt_sock;	
 	while(1){
 		char message[30];
-    int num[30];
-		printf("\nserver -> : ");
-		scanf("%d",num);
-		write(*cs,num,sizeof(num));
+    snprintf(message, sizeof(speed), "%d", speed);
+    if(speed > 0 || speed < MAXSPEED) send(*cs, message, strlen(message), 0);
+    sleep(0.1);
 	}
 }
 
@@ -89,11 +94,12 @@ void* receive_function(void* rcvdt){
 		int str_len=read(*(data->clnt_sock),data->message,sizeof(char)*30);
     if(strcmp(data->message,state))
     {
-      printf("\n바뀌었습니다. 저장을 진행합니다.\n");
+      printf("\n바뀌었습니다. 저장을 진행합니다.");
       strcpy(state,data->message);
       printf("\n <- client : %s\n",data->message);
+      number ++;
 
-      time_t timer;
+      time_t timer; // 매번 불러와야하는지? while밖에있으면 ?
       struct tm* t;
       timer = time(NULL);
       t = localtime(&timer);
@@ -105,7 +111,8 @@ void* receive_function(void* rcvdt){
       }
       else if(pid == 0)
       {
-        fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,state);
+        fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n%d번째 명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,number,state);
+        
         return 0;
       }
       else
@@ -115,6 +122,7 @@ void* receive_function(void* rcvdt){
       }
     }
   }
+  close(fd);
 }
 
 void* receive_function2(void* rcvdt){
@@ -125,19 +133,19 @@ void* receive_function2(void* rcvdt){
 		// printf("%s\n",state);
 		if(strcmp(state,"ac") == 0)
 		{
-			sleep(1);
       if(speed < MAXSPEED) increase_speed();
+      sleep(0.1);
 		}
 		if(strcmp(state,"br") == 0)
 		{
-			sleep(1);
-			if(speed >= MINSPEED) decrease_speed();
+			if(speed >= MINSPEED) decrease_speed2();
+      sleep(0.1);
 		}
 		if(strcmp(state,"nope") == 0)
 		{
-			sleep(1);
 			if(speed >= MINSPEED) decrease_speed();
-		}
+      sleep(0.1);
+    }
 	}
 }
 
