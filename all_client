@@ -105,8 +105,9 @@ def client2(form):
         try: 
             data2 = client_socket2.recv(8)
             state = data2.decode()
-            print(state)
-            form.setstate(state)
+            if state == "speedok0" or state == "speed000" or state == "speedng0": 
+              print(state)
+              form.setstate(state)
 
         except:
             print("except socket2")
