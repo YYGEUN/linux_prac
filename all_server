@@ -25,7 +25,6 @@
 #define CONNECTCLIENT 3
 #define BUFF_SIZE 128
 
-
 #define TH_COUNT 4
 #define TH_SPEED 0
 #define TH_MESG 1
@@ -42,14 +41,17 @@ void error_handling(char* message);
 
 pid_t pid_child;
 int server_socket;
-int client_count = 0;
+int pipeline[2];
+int client_count = 0,thread_count = 0;
 int client_sockets[CONNECTCLIENT];
 int total_speed=0;
-char state[1024];
+char state_acbr[1024];
+char state_speed[1024];
 int ac=0;
 int br=0;
 int speed = 0; 
 int number = 0;
+int n;
 
 struct mydata {
 	int pid;
@@ -80,126 +82,103 @@ void decrease_speed2() {
 
 void* msgfunc_th(void* empty){
 	while(1){
-    char imsi[128];
-    memset(imsi,0,sizeof(imsi));
-    if(speed > 150) {
-      sprintf(imsi,"%s","speednok");
-    }
-    else if(speed <= 150 && speed > 0) {
-      sprintf(imsi,"%s","speedokk");
-    }
-    else if(speed == 0) {
-      sprintf(imsi,"%s","speed000");
-    }
-    printf("sened sendfunc: %s\n",imsi);
-    write(client_sockets[SOCKET_2_MESG_IDX], imsi, 8);
-    printf("sened sendfunc done\n");
-    sleep(1);
+    // char imsi[128];
+    // memset(imsi,0,sizeof(imsi));
+    // if(speed > 150) {
+    //   sprintf(imsi,"%s","speednok");
+    // }
+    // else if(speed <= 150 && speed > 0) {
+    //   sprintf(imsi,"%s","speedokk");
+    // }
+    // else if(speed == 0) {
+    //   sprintf(imsi,"%s","speed000");
+    // }
+    // printf("sened sendfunc: %s\n",imsi);
+    // write(client_sockets[SOCKET_2_MESG_IDX], imsi, 8);
+    // printf("sened sendfunc done\n");
+    // sleep(1);
   }
 }
 
 void* sock_recv_fn_th(void* clnt_sock){
 	int socketfd =*(int*)clnt_sock;
-  int n;
   char imsi[BUFF_SIZE];
 
   while (1)
   {
     n = read(socketfd,imsi,sizeof(imsi));
     if(n <= 0) {
-        // socket error
+        perror("socket error\n");
         break;
     }
 
     printf("읽어온 명령어 : %s\n", imsi);
     // ->
     // mutext on
-    memcpy(imsi, state, sizeof(imsi));
+    memcpy(state_acbr, imsi, sizeof(imsi));
+
+    printf("잘복사되었나 명령어 : %s\n", state_acbr);
+    write(pipeline[1],state_acbr,sizeof(state_acbr));
     // mutex off
   }  
-
-  // fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
-  // if(fd<0){                 
-  //   printf("file open error\n");                     
-  // }    
-  // FILE *fdfile = fdopen(fd,"w");
-  // if (fdfile == NULL) {
-  //   perror("fdopen");
-  // }
-
-  //파이프 - 포크
-
-/*
-	while(1){
-		read(*(data->clnt_sock),data->message,sizeof(char)*30);
-    if(strcmp(data->message,state))
-    {
-      printf("\n바뀌었습니다. 저장을 진행합니다.");
-      strcpy(state,data->message);
-      printf("\n <- client : %s\n",data->message);
-      number ++;
-
-      time_t timer;
-      struct tm* t;
-      timer = time(NULL);
-      t = localtime(&timer);
-
-      pid = fork();
-      if(pid < 0)
-      {
-        perror("fork error");
-      }
-      else if(pid == 0)
-      {
-        // read(pipeline[0],data->message,sizeof(data->message));
-        fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n%d번째 명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,number,state);
-        
-        return 0;
-      }
-      else
-      {
-        write(pipeline[1],state,sizeof(state));
-        pid = wait(&status);
-      }
-    }
-  }
-  close(fd);
-*/
 }
 
 void* speedcalc_th(void* empty){
   int preSendedValue = 0;
+  char pre_state_speed[BUFF_SIZE];
+  strcpy(pre_state_speed,"none");
 	while(1)
 	{
     // -> mutex on
-		if(strcmp(state,"acin") == 0)
+    usleep(100*1000);
+		if(strcmp(state_acbr,"acin") == 0)
 		{
       if(speed < MAXSPEED) increase_speed();
-      usleep(100*1000);
 		}
-		if(strcmp(state,"brin") == 0)
+		if(strcmp(state_acbr,"brin") == 0)
 		{
 			if(speed > 0) decrease_speed2();
       if(speed < 0) speed = 0;
-      usleep(100*1000);
 		}
-		if(strcmp(state,"nope") == 0)
+		if(strcmp(state_acbr,"nope") == 0)
 		{
 			if(speed > 0) decrease_speed();
       if(speed < 0) speed = 0;
-      usleep(100*1000);
     }
 
     if(preSendedValue != speed) {
       preSendedValue = speed;
-      char imsi[128];
+      printf("현재속도 : %d\n",speed);
+      char imsi[BUFF_SIZE];
       sprintf(imsi, "%06d", speed);
       if(speed >= 0 || speed < MAXSPEED) {
         write(client_sockets[SOCKET_1_SPEED_IDX],imsi,6);
       }
-    }		
+
+      if(speed > 150)
+      {
+        strcpy(state_speed,"speedng0");
+      }
+      else if (speed > 0 && speed <= 150)
+      {
+        strcpy(state_speed,"speedok0");
+      }
+      else if (speed == 0)
+      {
+        strcpy(state_speed,"speed000");
+      }
+      if(strcmp(pre_state_speed,state_speed) != 0)
+      {
+        char msgimsi[BUFF_SIZE];
+        memset(msgimsi,0,sizeof(msgimsi));
+        strcpy(pre_state_speed,state_speed);
+        sprintf(msgimsi, "%s", state_speed);
+        write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
+        // printf("상태메세지 : %s\n",msgimsi);
+      }
+    }
+    // -> mutex off
 	}
-  // -> mutex off
 }
 
 void siginthandler(int _signo) {
@@ -236,8 +215,6 @@ void siginthandler(int _signo) {
 }
 
 int main(int argc, char *argv[]) {
-  int port1=PORT_1, port2=PORT_2;
-  int pipeline[2];
   socklen_t addrlen,addrlen2;
   int readn,status;
   char buf[MAXLINE];
@@ -245,8 +222,23 @@ int main(int argc, char *argv[]) {
   struct sockaddr_in client_addr,server_addr;
   pthread_t p_thread[TH_COUNT];	
 
+	if (pipe(pipeline)) {
+		perror("pipe()");
+		return -1;
+	}
+
+  int fd;
+  fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
+  if(fd<0){                 
+    printf("file open error\n");                     
+  }    
+  FILE *fdfile = fdopen(fd,"w");
+  if (fdfile == NULL) {
+    perror("fdopen");
+  }
   printf("parent (%d)\n", getpid());
   pid_child = fork();
+
   if(pid_child < 0) {
     perror("forkerror");
     return -1;
@@ -254,8 +246,34 @@ int main(int argc, char *argv[]) {
   else if(pid_child == 0) {
     printf("child created (%d)\n", getpid());
     close(pipeline[1]);
-    read(pipeline[0],msg1,sizeof(msg1));
-    printf("child pipe readed\n");
+
+    while(read(pipeline[0],state_acbr,sizeof(state_acbr))>0)
+    {
+      number ++;
+
+      time_t timer;
+      struct tm* t;
+      timer = time(NULL);
+      t = localtime(&timer);
+
+      fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
+      if(fd<0){                 
+        perror("file open error\n");  
+        return 1;                   
+      }    
+      FILE *fdfile = fdopen(fd,"w");
+      if (fdfile == NULL) {
+        perror("fdopen");
+        return 1;
+      }    
+      printf("child pipe readed : %s\n",state_acbr);
+      fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n%d번째 명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,number,state_acbr);
+      
+      fclose(fdfile);
+      close(fd);
+    }
+
+    close(pipeline[0]);
     return 0;
   }
 
@@ -271,7 +289,7 @@ int main(int argc, char *argv[]) {
   memset((void *)&server_addr, 0, sizeof(server_addr));
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_addr.sin_port = htons(port1);
+  server_addr.sin_port = htons(PORT_1);
   int optval = 1;
 
   setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
@@ -288,22 +306,30 @@ int main(int argc, char *argv[]) {
   printf("신호대기중 .....\n");
 
   pthread_create(&p_thread[TH_SPEED], NULL, speedcalc_th, NULL);
+  thread_count ++;
   pthread_create(&p_thread[TH_MESG], NULL, msgfunc_th, NULL);
-  while(client_count >= 3)
+  thread_count ++;
+
+  while(client_count < 2)
   {
     // listen 1 | accept = main th
     // recv socket 1 = recv th 1
     // recv socket 2 = recv th 2
     // calc = th 3
-    // msg = th 3
+    // msg = th 4
     addrlen = sizeof(client_addr);      
     client_sockets[client_count] = accept(server_socket, (struct sockaddr*)&client_addr, &addrlen);
     if(client_sockets[client_count] == -1) {
       perror("accept error\n");
     }
-    pthread_create(&p_thread[client_count+TH_MESG+1],NULL, sock_recv_fn_th,(void*)&client_sockets[client_count]);
+
+    printf("--------------------- connected client : %d ------------------------\n",client_count);
+
+    pthread_create(&p_thread[thread_count+client_count],NULL, sock_recv_fn_th,(void*)&client_sockets[client_count]);
     client_count++;
   }
+
+
   
   for(int i = 0; i < TH_COUNT; i++) {
     pthread_join(p_thread[i],(void **)&status);
@@ -311,6 +337,9 @@ int main(int argc, char *argv[]) {
   for(int i = 0; i < client_count; i++) {
     close(client_sockets[i]);
   }
+
+//atexit 구현해보기
+
   close(server_socket);
   wait(NULL);
   
