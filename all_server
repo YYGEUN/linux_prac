@@ -45,8 +45,9 @@ int pipeline[2];
 int client_count = 0,thread_count = 0;
 int client_sockets[CONNECTCLIENT];
 int total_speed=0;
-char state_acbr[1024];
-char state_speed[1024];
+char state_acbr[BUFF_SIZE];
+char state_turnsignal[BUFF_SIZE];
+char state_speed[BUFF_SIZE];
 int ac=0;
 int br=0;
 int speed = 0; 
@@ -69,16 +70,31 @@ typedef struct {
 void increase_speed() {
     speed += 3;
 }
-
 void decrease_speed() {
     speed -= 1;
 }
-
 void decrease_speed2() {
     speed -= 3;
 }
 
+void* turnsignal(void* empty){
+	while(1){
+    char msgimsi[BUFF_SIZE];
+    memset(msgimsi,0,sizeof(msgimsi));
 
+    if(strcmp(state_turnsignal,"right000"))
+    {
+      write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+    }
+    else if(strcmp(state_turnsignal,"left0000"))
+    {
+      write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+    }
+
+    printf("턴 시그널 상태메세지 : %s\n",msgimsi);
+    sleep(1);
+  }
+}
 
 void* msgfunc_th(void* empty){
 	while(1){
@@ -106,6 +122,7 @@ void* sock_recv_fn_th(void* clnt_sock){
 
   while (1)
   {
+    memset(imsi,0,sizeof(imsi));
     n = read(socketfd,imsi,sizeof(imsi));
     if(n <= 0) {
         perror("socket error\n");
@@ -115,10 +132,17 @@ void* sock_recv_fn_th(void* clnt_sock){
     printf("읽어온 명령어 : %s\n", imsi);
     // ->
     // mutext on
-    memcpy(state_acbr, imsi, sizeof(imsi));
+    if(!strcmp(imsi,"acin") || !strcmp(imsi,"nope") ||!strcmp(imsi,"brin"))
+    {
+      memcpy(state_acbr, imsi, sizeof(imsi));
+    }
+    if(!strcmp(imsi,"left_on") || !strcmp(imsi,"right_on") ||!strcmp(imsi,"left_off") || !strcmp(imsi,"right_off"))
+    {
+      memcpy(state_turnsignal, imsi, sizeof(imsi));
+    }
 
-    printf("잘복사되었나 명령어 : %s\n", state_acbr);
-    write(pipeline[1],state_acbr,sizeof(state_acbr));
+    printf("잘복사되었나 명령어 : %s\n", imsi);
+    write(pipeline[1],imsi,sizeof(imsi));
     // mutex off
   }  
 }
@@ -174,7 +198,7 @@ void* speedcalc_th(void* empty){
         strcpy(pre_state_speed,state_speed);
         sprintf(msgimsi, "%s", state_speed);
         write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
-        // printf("상태메세지 : %s\n",msgimsi);
+        printf("속도 상태메세지 : %s\n",msgimsi);
       }
     }
     // -> mutex off
@@ -228,14 +252,7 @@ int main(int argc, char *argv[]) {
 	}
 
   int fd;
-  fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
-  if(fd<0){                 
-    printf("file open error\n");                     
-  }    
-  FILE *fdfile = fdopen(fd,"w");
-  if (fdfile == NULL) {
-    perror("fdopen");
-  }
+
   printf("parent (%d)\n", getpid());
   pid_child = fork();
 
@@ -305,10 +322,11 @@ int main(int argc, char *argv[]) {
 
   printf("신호대기중 .....\n");
 
+  // 상시쓰레드
   pthread_create(&p_thread[TH_SPEED], NULL, speedcalc_th, NULL);
   thread_count ++;
-  pthread_create(&p_thread[TH_MESG], NULL, msgfunc_th, NULL);
-  thread_count ++;
+  // pthread_create(&p_thread[TH_MESG], NULL, msgfunc_th, NULL);
+  // thread_count ++;
 
   while(client_count < 2)
   {
@@ -328,7 +346,6 @@ int main(int argc, char *argv[]) {
     pthread_create(&p_thread[thread_count+client_count],NULL, sock_recv_fn_th,(void*)&client_sockets[client_count]);
     client_count++;
   }
-
 
   
   for(int i = 0; i < TH_COUNT; i++) {
