@@ -30,7 +30,6 @@
 #define TH_MESG 1
 #define MAX_LISTEN_COUNT 5
 #define PORT_1 5005
-#define PORT_2 5006
 
 #define SOCKET_1_SPEED_IDX 0
 #define SOCKET_2_MESG_IDX 1
@@ -77,22 +76,43 @@ void decrease_speed2() {
     speed -= 3;
 }
 
-void* turnsignal(void* empty){
+void* turnsignal_th(void* empty){
+  char pre_state_signal[BUFF_SIZE];
+  strcpy(pre_state_signal,"rrrrllll");
 	while(1){
     char msgimsi[BUFF_SIZE];
     memset(msgimsi,0,sizeof(msgimsi));
-
-    if(strcmp(state_turnsignal,"right000"))
+    if(!strcmp("left_on",state_turnsignal) || !strcmp("left_off",state_turnsignal) ||!strcmp("right_off",state_turnsignal) ||!strcmp("right_on",state_turnsignal))
     {
-      write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+      if(strcmp(pre_state_signal,state_turnsignal))
+      {
+        strcpy(pre_state_signal,state_turnsignal);
+        if(strcmp(state_turnsignal,"left_on") == 0)
+        {
+          strcpy(msgimsi,"left0000");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+        else if(strcmp(state_turnsignal,"left_off") == 0)
+        {
+          strcpy(msgimsi,"left1111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+        else if(strcmp(state_turnsignal,"right_on") == 0)
+        {
+          strcpy(msgimsi,"right000");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+        else if(strcmp(state_turnsignal,"right_off") == 0)
+        {
+          strcpy(msgimsi,"right111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+      }
     }
-    else if(strcmp(state_turnsignal,"left0000"))
-    {
-      write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
-    }
-
-    printf("턴 시그널 상태메세지 : %s\n",msgimsi);
-    sleep(1);
   }
 }
 
@@ -129,19 +149,20 @@ void* sock_recv_fn_th(void* clnt_sock){
         break;
     }
 
-    printf("읽어온 명령어 : %s\n", imsi);
+    // printf("읽어온 명령어 : %s\n", imsi);
     // ->
     // mutext on
     if(!strcmp(imsi,"acin") || !strcmp(imsi,"nope") ||!strcmp(imsi,"brin"))
     {
       memcpy(state_acbr, imsi, sizeof(imsi));
+      printf("속도 상태 수신 메세지 : %s\n",imsi);
     }
     if(!strcmp(imsi,"left_on") || !strcmp(imsi,"right_on") ||!strcmp(imsi,"left_off") || !strcmp(imsi,"right_off"))
     {
       memcpy(state_turnsignal, imsi, sizeof(imsi));
+      printf("시그널 상태 수신 메세지 : %s\n",imsi);
     }
 
-    printf("잘복사되었나 명령어 : %s\n", imsi);
     write(pipeline[1],imsi,sizeof(imsi));
     // mutex off
   }  
@@ -175,10 +196,12 @@ void* speedcalc_th(void* empty){
       printf("현재속도 : %d\n",speed);
       char imsi[BUFF_SIZE];
       sprintf(imsi, "%06d", speed);
+      // 속도 값 전달 to SOCKET_1_SPEED_IDX
       if(speed >= 0 || speed < MAXSPEED) {
         write(client_sockets[SOCKET_1_SPEED_IDX],imsi,6);
       }
 
+      // 속도 상태 전달 to SOCKET_2_MESG_IDX
       if(speed > 150)
       {
         strcpy(state_speed,"speedng0");
@@ -198,7 +221,7 @@ void* speedcalc_th(void* empty){
         strcpy(pre_state_speed,state_speed);
         sprintf(msgimsi, "%s", state_speed);
         write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
-        printf("속도 상태메세지 : %s\n",msgimsi);
+        printf("속도 상태 발신 메세지 : %s\n",msgimsi);
       }
     }
     // -> mutex off
@@ -325,8 +348,8 @@ int main(int argc, char *argv[]) {
   // 상시쓰레드
   pthread_create(&p_thread[TH_SPEED], NULL, speedcalc_th, NULL);
   thread_count ++;
-  // pthread_create(&p_thread[TH_MESG], NULL, msgfunc_th, NULL);
-  // thread_count ++;
+  pthread_create(&p_thread[TH_MESG], NULL, turnsignal_th, NULL);
+  thread_count ++;
 
   while(client_count < 2)
   {
