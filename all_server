@@ -135,37 +135,33 @@ void* fuel_charge(void* empty)
 void* fuel_th(void* empty){
 	while(1){
     char msgimsi[BUFF_SIZE];
+    char numimsi[BUFF_SIZE];
     memset(msgimsi,0,sizeof(msgimsi));
     while(!strcmp(state_engine,"turn_on"))
     {
       sleep(10);
-      write(client_sockets[SOCKET_2_MESG_IDX],"fuel0001",8);
+      fuel -= 1;
+      printf("현재 연료량 : %d\n", fuel);
+      sprintf(numimsi, "%08d", fuel);
+      write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
     }
   }
 }
+void* fuel_transfer(void* empty)
+{
+  char msgimsi[BUFF_SIZE];
+  memset(msgimsi,0,sizeof(msgimsi));
+  if(!strcmp("fuel_charge",state_fuel_charge))
+  {
+    strcpy(state_fuel_charge,"nocharge");
+    strcpy(msgimsi,"fuel0000");
+    write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
+    fuel = 100;
+    printf("연료 충전 발신 메세지 : %s\n",msgimsi);
+  }
+}
 
-// void file_process_fuel()
-// {
-//   time_t timer;
-//   struct tm* t;
-//   timer = time(NULL);
-//   t = localtime(&timer);
-
-//   int fuel_fd;
-//   fuel_fd=open("fuel.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
-//   if(fuel_fd<0){                 
-//     perror("file open error\n");  
-//     return;                   
-//   }    
-//   FILE *fdfile = fdopen(fuel_fd,"w");
-//   if (fdfile == NULL) {
-//     perror("fdopen");
-//     return;
-//   }    
-//   fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
-//   fprintf(fdfile, "%d\n",fuel);
-// }
-void file_process(char type[])
+void file_process_write(char type[])
 {
   time_t timer;
   struct tm* t;
@@ -182,13 +178,12 @@ void file_process(char type[])
   }    
   FILE *fdfile = fdopen(fd,"w");
   if (fdfile == NULL) {
-    perror("fdopen");
+    perror("write fdopen error");
     return;
   }
 
   if(!strcmp(type,"fuel.txt"))
   {
-    fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
     fprintf(fdfile, "%d\n",fuel);
   }
   else
@@ -196,6 +191,39 @@ void file_process(char type[])
     fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
     fprintf(fdfile, "%d번째 명령어 : %s\n",number,state_acbr);
   }
+
+  sem_sysv_release(sem_id);
+
+  fclose(fdfile);
+  close(fd);
+}
+void file_process_read(char type[])
+{
+  sem_sysv_get(sem_id);
+
+  int fd;
+  fd = open(type, O_RDONLY);
+  char numimsi[BUFF_SIZE];
+  if(fd<0){                 
+    printf("저장된 자료가없습니다. 연료를 100으로 시작합니다\n");
+    fuel = 100;
+    sprintf(numimsi, "%08d", fuel);
+    write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
+    return;                   
+  }    
+  FILE *fdfile = fdopen(fd,"r");
+  if (fdfile == NULL) {
+    perror("write fdopen error");
+    return;
+  }
+
+  char imsi[BUFF_SIZE];
+  while (fgets(imsi, sizeof(imsi), fdfile) != NULL) {
+      fuel = atoi(imsi);
+  }
+
+  sprintf(numimsi, "%08d", fuel);
+  write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
 
   sem_sysv_release(sem_id);
 
@@ -246,6 +274,7 @@ void* turnsignal_th(void* empty){
 void* sock_recv_fn_th(void* clnt_sock){
 	int socketfd =*(int*)clnt_sock;
   char imsi[BUFF_SIZE];
+  char numimsi[BUFF_SIZE];
   while (1)
   {
     memset(imsi,0,sizeof(imsi));
@@ -273,7 +302,7 @@ void* sock_recv_fn_th(void* clnt_sock){
       fuel_charge(NULL);
     }
     if(!strcmp(imsi,"turn_on") || !strcmp(imsi,"turn_off"))
-    {
+    {      
       memcpy(state_engine, imsi, sizeof(imsi));
       printf("엔진 상태 수신 메세지 : %s\n",imsi);
     }
@@ -371,7 +400,7 @@ void siginthandler(int _signo) {
   close(server_socket);
   printf("clean up done\n");
 
-  file_process("fuel.txt");
+  file_process_write("fuel.txt");
 
   exit(0);
 }
@@ -404,7 +433,7 @@ int main(int argc, char *argv[]) {
 
     while(read(pipeline[0],state_acbr,sizeof(state_acbr))>0)
     {
-      file_process("log.txt");
+      file_process_write("log.txt");
     }
     close(pipeline[0]);
     return 0;
@@ -459,6 +488,8 @@ int main(int argc, char *argv[]) {
     client_count++;
   }
 
+  file_process_read("fuel.txt");
+  printf("이전 연료량은 %d 입니다\n",fuel);
 
   for(int i = 0; i < TH_COUNT; i++) {
     pthread_join(p_thread[i],(void **)&status);
@@ -467,7 +498,8 @@ int main(int argc, char *argv[]) {
     close(client_sockets[i]);
   }
 
-  // //atexit 구현해보기
+  file_process_write("fuel.txt");
+
   semctl(sem_id, 0, IPC_RMID);
   close(server_socket);
   wait(NULL);
