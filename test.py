@@ -4,6 +4,7 @@ from PyQt5 import uic     # ui파일을 사용하기 위한 함수
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
+from PyQt5.QtCore import QThread, QObject, pyqtSignal
 import threading, time
 import socket #socket module
 
@@ -123,34 +124,20 @@ def client2(form):
     client_socket2.close()
     print("TH2-2 종료")
 
+class Worker(QObject):
+    start_timer_signal = pyqtSignal(str)
+    stop_timer_signal = pyqtSignal()
 
-# def calcSpeed(form):
-#     global doAcc
-#     global doBrk
-#     global curSpeed
-#     while doExit == False:
-#         time.sleep(0.1)
-#         preSpeed = curSpeed
-#         if doAcc == True:
-#             if curSpeed < maxSpeed:
-#                 curSpeed += accValue
-#         elif doBrk == True:
-#             if curSpeed > 0:
-#                 curSpeed -= brkValue
-#         else:
-#             if curSpeed > 0:
-#                 curSpeed -= ntValue
-                
-#         if curSpeed < 0:
-#             curSpeed = 0
-            
-#         if curSpeed > maxSpeed:
-#             curSpeed = maxSpeed
-            
-#         if preSpeed != curSpeed:
-#             form.setSpeedTarget(curSpeed)
-    
-#     print("TH1 종료")
+    def setsignalstate(self, value):
+        if value == "left0000":
+            self.start_timer_signal.emit("left")
+        elif value == "left1111":
+            self.stop_timer_signal.emit()
+        elif value == "right000":
+            self.start_timer_signal.emit("right")
+        elif value == "right111":
+            self.stop_timer_signal.emit()
+
     
 class Form(QtWidgets.QMainWindow):
     def __init__(self):
@@ -174,9 +161,21 @@ class Form(QtWidgets.QMainWindow):
         self.timerCalc.start(30) # Only one timer is needed
 
         self.timerleft = QTimer(self)
-        self.timerleft.timeout.connect(self.visiblelamp)
+        self.timerleft.timeout.connect(self.toggle_image_visibility)
+        self.timerleft_started = False
+        self.left_visible = False  # 'left.png' 이미지 표시 상태
+
         self.timerright = QTimer(self)
-        self.timerright.timeout.connect(self.visiblelamp)
+        self.timerright.timeout.connect(self.toggle_image_visibility)
+        self.timerright_started = False
+        self.right_visible = False  # 'right.PNG' 이미지 표시 상태
+
+        self.worker_thread = QThread()
+        self.worker = Worker()
+        self.worker.moveToThread(self.worker_thread)
+
+        self.worker.start_timer_signal.connect(self.start_timer)
+        self.worker.stop_timer_signal.connect(self.stop_timer)
         
         self.ui.msg.setText("Turn ON 버튼을 눌러주세요.")
         self.ui.accel.setEnabled(False)
@@ -247,6 +246,25 @@ class Form(QtWidgets.QMainWindow):
 
         self.show_image = not self.show_image  # 이미지 표시 상태 변경
 
+
+    def start_timer(self, image_type):
+        if image_type == "left" and not self.timerleft_started:
+            self.timerleft.start(1000)  # 'left.png' 이미지를 1초 간격으로 표시/숨기기 시작
+            self.timerleft_started = True
+        elif image_type == "right" and not self.timerright_started:
+            self.timerright.start(1000)  # 'right.PNG' 이미지를 1초 간격으로 표시/숨기기 시작
+            self.timerright_started = True
+
+    def stop_timer(self):
+        self.timerleft.stop()  # 'left.png' 이미지를 표시하지 않고 타이머 중지
+        self.timerright.stop()  # 'right.PNG' 이미지를 표시하지 않고 타이머 중지
+
+    def toggle_image_visibility(self):
+        if self.sender() == self.timerleft:
+            self.left_visible = not self.left_visible  # 'left.png' 이미지 표시 상태 변경
+        elif self.sender() == self.timerright:
+            self.right_visible = not self.right_visible  # 'right.PNG' 이미지 표시 상태 변경
+        self.update()  # paintEvent를 호출하여 이미지를 다시 그립니다.
 
     def setsignalstate(self,value):
         if(value == "left0000"):
