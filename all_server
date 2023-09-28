@@ -18,53 +18,96 @@
 #include <signal.h>
 #include <time.h> //C언어
 
+#define NUM_SEM	 1
 #define MAXLINE 1024
+
+// 속도 관련
 #define MAXSPEED 230
 #define MINSPEED 3
 #define SPEEDCHANGE_V 3
-#define CONNECTCLIENT 3
 #define BUFF_SIZE 128
 
-#define TH_COUNT 4
+// 
+#define TH_COUNT 5
 #define TH_SPEED 0
-#define TH_MESG 1
+#define TH_MESG_SIGNAL 1
+#define TH_MESG_FUEL 2
 #define MAX_LISTEN_COUNT 5
 #define PORT_1 5005
 
+#define CONNECTCLIENT 2
 #define SOCKET_1_SPEED_IDX 0
 #define SOCKET_2_MESG_IDX 1
 
 // 192.168.50.31
 
-void error_handling(char* message);
+void error_handling(char* message)
+{
+	fputs(message,stderr);
+	fputc('\n',stderr);
+	exit(1);
+}
 
 pid_t pid_child;
 int server_socket;
 int pipeline[2];
 int client_count = 0,thread_count = 0;
 int client_sockets[CONNECTCLIENT];
+pthread_t p_thread[TH_COUNT];
+int fuel;
 int total_speed=0;
+char state_engine[BUFF_SIZE];
 char state_acbr[BUFF_SIZE];
 char state_turnsignal[BUFF_SIZE];
 char state_speed[BUFF_SIZE];
+char state_fuel_charge[BUFF_SIZE];
 int ac=0;
 int br=0;
 int speed = 0; 
 int number = 0;
 int n;
+int sem_id;
+int ret;
+int status;
+int exit_flag = 0;
 
-struct mydata {
-	int pid;
-  int type;
-	int rotatevalue;
-	char msg[256];
-};
+static int init_semaphore(void)
+{
+	key_t key = 7000;
+	int semid;
+	semid = semget(key, NUM_SEM, IPC_CREAT | 0666);
+	if (semid == -1) {
+		perror("semget()");
+		return -1;
+	}
 
-typedef struct {
-	int* clnt_sock;
-  int* speed;
-	char* message;
-}recv_data;
+	return semid;
+}
+static int sem_sysv_init(int sem_id)
+{
+	semctl(sem_id, 0, SETVAL, 1);	/* binary semaphore */
+	return 0;
+}
+static int sem_sysv_get(int sem_id)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_op = -1;
+	semop(sem_id, &buf, 1);
+
+	return 0;
+}
+static int sem_sysv_release(int sem_id)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_op = 1;
+	semop(sem_id, &buf, 1);
+
+	return 0;
+}
 
 void increase_speed() {
     speed += 3;
@@ -74,6 +117,90 @@ void decrease_speed() {
 }
 void decrease_speed2() {
     speed -= 3;
+}
+
+void* fuel_charge(void* empty)
+{
+  char msgimsi[BUFF_SIZE];
+  memset(msgimsi,0,sizeof(msgimsi));
+  if(!strcmp("fuel_charge",state_fuel_charge))
+  {
+    strcpy(state_fuel_charge,"nocharge");
+    strcpy(msgimsi,"fuel0000");
+    write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
+    fuel = 100;
+    printf("연료 충전 발신 메세지 : %s\n",msgimsi);
+  }
+}
+void* fuel_th(void* empty){
+	while(1){
+    char msgimsi[BUFF_SIZE];
+    memset(msgimsi,0,sizeof(msgimsi));
+    while(!strcmp(state_engine,"turn_on"))
+    {
+      sleep(10);
+      write(client_sockets[SOCKET_2_MESG_IDX],"fuel0001",8);
+    }
+  }
+}
+
+// void file_process_fuel()
+// {
+//   time_t timer;
+//   struct tm* t;
+//   timer = time(NULL);
+//   t = localtime(&timer);
+
+//   int fuel_fd;
+//   fuel_fd=open("fuel.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
+//   if(fuel_fd<0){                 
+//     perror("file open error\n");  
+//     return;                   
+//   }    
+//   FILE *fdfile = fdopen(fuel_fd,"w");
+//   if (fdfile == NULL) {
+//     perror("fdopen");
+//     return;
+//   }    
+//   fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
+//   fprintf(fdfile, "%d\n",fuel);
+// }
+void file_process(char type[])
+{
+  time_t timer;
+  struct tm* t;
+  timer = time(NULL);
+  t = localtime(&timer);
+
+  sem_sysv_get(sem_id);
+
+  int fd;
+  fd=open(type,O_CREAT|O_RDWR|O_APPEND, 0666);     
+  if(fd<0){                 
+    perror("file open error\n");  
+    return;                   
+  }    
+  FILE *fdfile = fdopen(fd,"w");
+  if (fdfile == NULL) {
+    perror("fdopen");
+    return;
+  }
+
+  if(!strcmp(type,"fuel.txt"))
+  {
+    fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
+    fprintf(fdfile, "%d\n",fuel);
+  }
+  else
+  {
+    fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
+    fprintf(fdfile, "%d번째 명령어 : %s\n",number,state_acbr);
+  }
+
+  sem_sysv_release(sem_id);
+
+  fclose(fdfile);
+  close(fd);
 }
 
 void* turnsignal_th(void* empty){
@@ -116,30 +243,9 @@ void* turnsignal_th(void* empty){
   }
 }
 
-void* msgfunc_th(void* empty){
-	while(1){
-    // char imsi[128];
-    // memset(imsi,0,sizeof(imsi));
-    // if(speed > 150) {
-    //   sprintf(imsi,"%s","speednok");
-    // }
-    // else if(speed <= 150 && speed > 0) {
-    //   sprintf(imsi,"%s","speedokk");
-    // }
-    // else if(speed == 0) {
-    //   sprintf(imsi,"%s","speed000");
-    // }
-    // printf("sened sendfunc: %s\n",imsi);
-    // write(client_sockets[SOCKET_2_MESG_IDX], imsi, 8);
-    // printf("sened sendfunc done\n");
-    // sleep(1);
-  }
-}
-
 void* sock_recv_fn_th(void* clnt_sock){
 	int socketfd =*(int*)clnt_sock;
   char imsi[BUFF_SIZE];
-
   while (1)
   {
     memset(imsi,0,sizeof(imsi));
@@ -149,8 +255,6 @@ void* sock_recv_fn_th(void* clnt_sock){
         break;
     }
 
-    // printf("읽어온 명령어 : %s\n", imsi);
-    // ->
     // mutext on
     if(!strcmp(imsi,"acin") || !strcmp(imsi,"nope") ||!strcmp(imsi,"brin"))
     {
@@ -161,6 +265,17 @@ void* sock_recv_fn_th(void* clnt_sock){
     {
       memcpy(state_turnsignal, imsi, sizeof(imsi));
       printf("시그널 상태 수신 메세지 : %s\n",imsi);
+    }
+    if(!strcmp(imsi,"fuel_charge"))
+    {
+      memcpy(state_fuel_charge, imsi, sizeof(imsi));
+      printf("연료 상태 수신 메세지 : %s\n",imsi);
+      fuel_charge(NULL);
+    }
+    if(!strcmp(imsi,"turn_on") || !strcmp(imsi,"turn_off"))
+    {
+      memcpy(state_engine, imsi, sizeof(imsi));
+      printf("엔진 상태 수신 메세지 : %s\n",imsi);
     }
 
     write(pipeline[1],imsi,sizeof(imsi));
@@ -251,30 +366,30 @@ void siginthandler(int _signo) {
   for(int i = 0; i < client_count; i++) {
     close(client_sockets[i]);
   }
+
+  semctl(sem_id, 0, IPC_RMID);
   close(server_socket);
   printf("clean up done\n");
 
-  // thread 종료
-  // cancel 
-  // join
-  //
+  file_process("fuel.txt");
+
   exit(0);
 }
 
 int main(int argc, char *argv[]) {
   socklen_t addrlen,addrlen2;
-  int readn,status;
+  int status,fd;
   char buf[MAXLINE];
   char msg1[MAXLINE];
-  struct sockaddr_in client_addr,server_addr;
-  pthread_t p_thread[TH_COUNT];	
+  struct sockaddr_in client_addr,server_addr;	
+
+  sem_id = init_semaphore();
+  sem_sysv_init(sem_id);
 
 	if (pipe(pipeline)) {
 		perror("pipe()");
 		return -1;
 	}
-
-  int fd;
 
   printf("parent (%d)\n", getpid());
   pid_child = fork();
@@ -289,30 +404,8 @@ int main(int argc, char *argv[]) {
 
     while(read(pipeline[0],state_acbr,sizeof(state_acbr))>0)
     {
-      number ++;
-
-      time_t timer;
-      struct tm* t;
-      timer = time(NULL);
-      t = localtime(&timer);
-
-      fd=open("log.txt",O_CREAT|O_RDWR|O_APPEND, 0666);     
-      if(fd<0){                 
-        perror("file open error\n");  
-        return 1;                   
-      }    
-      FILE *fdfile = fdopen(fd,"w");
-      if (fdfile == NULL) {
-        perror("fdopen");
-        return 1;
-      }    
-      printf("child pipe readed : %s\n",state_acbr);
-      fprintf(fdfile, "현재시간 : %d시 %d분 %d초 \n%d번째 명령어 : %s\n", t->tm_hour,t->tm_min,t->tm_sec,number,state_acbr);
-      
-      fclose(fdfile);
-      close(fd);
+      file_process("log.txt");
     }
-
     close(pipeline[0]);
     return 0;
   }
@@ -342,22 +435,18 @@ int main(int argc, char *argv[]) {
     perror("listen error");
       return 1;
   }
-
   printf("신호대기중 .....\n");
 
   // 상시쓰레드
   pthread_create(&p_thread[TH_SPEED], NULL, speedcalc_th, NULL);
   thread_count ++;
-  pthread_create(&p_thread[TH_MESG], NULL, turnsignal_th, NULL);
+  pthread_create(&p_thread[TH_MESG_SIGNAL], NULL, turnsignal_th, NULL);
+  thread_count ++;
+  pthread_create(&p_thread[TH_MESG_FUEL], NULL, fuel_th, NULL);
   thread_count ++;
 
   while(client_count < 2)
   {
-    // listen 1 | accept = main th
-    // recv socket 1 = recv th 1
-    // recv socket 2 = recv th 2
-    // calc = th 3
-    // msg = th 4
     addrlen = sizeof(client_addr);      
     client_sockets[client_count] = accept(server_socket, (struct sockaddr*)&client_addr, &addrlen);
     if(client_sockets[client_count] == -1) {
@@ -370,7 +459,7 @@ int main(int argc, char *argv[]) {
     client_count++;
   }
 
-  
+
   for(int i = 0; i < TH_COUNT; i++) {
     pthread_join(p_thread[i],(void **)&status);
   }
@@ -378,17 +467,10 @@ int main(int argc, char *argv[]) {
     close(client_sockets[i]);
   }
 
-//atexit 구현해보기
-
+  // //atexit 구현해보기
+  semctl(sem_id, 0, IPC_RMID);
   close(server_socket);
   wait(NULL);
   
   return 0;
-}
-
-void error_handling(char* message)
-{
-	fputs(message,stderr);
-	fputc('\n',stderr);
-	exit(1);
 }
