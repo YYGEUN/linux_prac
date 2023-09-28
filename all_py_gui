@@ -116,6 +116,16 @@ def client2(form):
             elif state == "right000" or state == "left0000" or state == "right111" or state == "left1111": 
               print(state)
               form.setsignalstate(state)
+            
+            # 연료충전 상태 수신
+            elif state == "fuel0000":
+              print(state)
+              form.setfuelstate(state)
+
+            # 연료량 수신
+            else:
+              print(int(state),state)
+              form.setfuelstate(state)
 
         except:
             print("except socket2")
@@ -127,16 +137,24 @@ def client2(form):
 class Worker(QThread):
     start_timer_signal = pyqtSignal(str)
     stop_timer_signal = pyqtSignal(str)
+    set_fuel_bar_signal = pyqtSignal(str)
 
-    def setsignalstate(self, value):
-        if value == "left0000":
+    def setsignalstate(self, state):
+        if state == "left0000":
             self.start_timer_signal.emit("left")
-        elif value == "left1111":
+        elif state == "left1111":
             self.stop_timer_signal.emit("leftoff")
-        elif value == "right000":
+        elif state == "right000":
             self.start_timer_signal.emit("right")
-        elif value == "right111":
+        elif state == "right111":
             self.stop_timer_signal.emit("rightoff")
+
+    def setfuelstate(self, state):
+        if state == "fuel0000":
+            self.set_fuel_bar_signal.emit("charge")
+        else:
+            print(state)
+            self.set_fuel_bar_signal.emit(state)
 
     
 class Form(QtWidgets.QMainWindow):
@@ -176,6 +194,7 @@ class Form(QtWidgets.QMainWindow):
 
         self.worker.start_timer_signal.connect(self.start_timer)
         self.worker.stop_timer_signal.connect(self.stop_timer)
+        self.worker.set_fuel_bar_signal.connect(self.set_fuel_bar)
         
         self.ui.msg.setText("Turn ON 버튼을 눌러주세요.")
         self.ui.accel.setEnabled(False)
@@ -191,6 +210,11 @@ class Form(QtWidgets.QMainWindow):
         self.ui.brake.released.connect(self.braker)
         self.ui.rh.clicked.connect(self.rightside)
         self.ui.lh.clicked.connect(self.leftside)
+        self.ui.fuelbtn.clicked.connect(self.fuel_charge)
+
+    def fuel_charge(self):
+        msg = "fuel_charge\x00"
+        client_socket2.send(msg.encode())
 
     def rightside(self): ##############################################
         global client_socket2
@@ -211,7 +235,6 @@ class Form(QtWidgets.QMainWindow):
         else:
             msg = "left_off\x00"
             client_socket2.send(msg.encode())
-
 
     def calcRotate(self):
         if self.rotatevalue < self.rotatetarget:
@@ -238,21 +261,36 @@ class Form(QtWidgets.QMainWindow):
         elif(value == "speed000"):
             self.ui.msg.setText("정지 - 출발가능")
 
-    def start_timer(self, image_type):
-        if image_type == "left" and not self.timerleft_started:
+    def setfuelstate(self,state):
+        if state == "fuel0000":
+            self.worker.setfuelstate("fuel0000")
+            self.update()
+        else:
+            self.worker.setfuelstate(state)
+            self.update()
+
+    def set_fuel_bar(self, signo):
+        print(signo)
+        if signo == "charge":
+            self.ui.fuelbar.setValue(100)
+        else:
+            self.ui.fuelbar.setValue(int(signo))
+
+    def start_timer(self, signo):
+        if signo == "left" and not self.timerleft_started:
             self.timerleft.start(500)  # 'left.png' 이미지를 1초 간격으로 표시/숨기기 시작
             self.timerleft_started = True
-        elif image_type == "right" and not self.timerright_started:
+        elif signo == "right" and not self.timerright_started:
             self.timerright.start(500)  # 'right.PNG' 이미지를 1초 간격으로 표시/숨기기 시작
             self.timerright_started = True
 
-    def stop_timer(self,image_type):
-        if image_type == "leftoff":
+    def stop_timer(self,signo):
+        if signo == "leftoff":
             self.timerleft.stop()
             self.timerleft_started = False
-        elif image_type == "rightoff":
+        elif signo == "rightoff":
             self.timerright.stop()
-            self.timerright_started = True
+            self.timerright_started = False
 
     def toggle_image_visibility(self):
         if self.sender() == self.timerleft:
@@ -261,20 +299,20 @@ class Form(QtWidgets.QMainWindow):
             self.right_visible = not self.right_visible  # 'right.PNG' 이미지 표시 상태 변경
         self.update()  # paintEvent를 호출하여 이미지를 다시 그립니다.
 
-    def setsignalstate(self, value):
-        if value == "left0000":
+    def setsignalstate(self, state):
+        if state == "left0000":
             self.worker.setsignalstate("left0000")
             self.left_visible = True
             self.update()
-        elif value == "left1111":
+        elif state == "left1111":
             self.worker.setsignalstate("left1111")
             self.left_visible = False
             self.update()
-        elif value == "right000":
+        elif state == "right000":
             self.worker.setsignalstate("right000")
             self.right_visible = True
             self.update()
-        elif value == "right111":
+        elif state == "right111":
             self.worker.setsignalstate("right111")
             self.right_visible = False
             self.update()
