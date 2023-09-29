@@ -137,10 +137,14 @@ void* fuel_th(void* empty){
     char msgimsi[BUFF_SIZE];
     char numimsi[BUFF_SIZE];
     memset(msgimsi,0,sizeof(msgimsi));
+    printf("%s")
     while(!strcmp(state_engine,"turn_on"))
     {
       sleep(10);
-      fuel -= 1;
+      if(fuel > 0)
+      {
+        fuel -= 1;
+      }
       printf("현재 연료량 : %d\n", fuel);
       sprintf(numimsi, "%08d", fuel);
       write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
@@ -304,7 +308,7 @@ void* sock_recv_fn_th(void* clnt_sock){
     if(!strcmp(imsi,"turn_on") || !strcmp(imsi,"turn_off"))
     {      
       memcpy(state_engine, imsi, sizeof(imsi));
-      printf("엔진 상태 수신 메세지 : %s\n",imsi);
+      printf("엔진 상태 수신 메세지 : %s\n",state_engine);
     }
 
     write(pipeline[1],imsi,sizeof(imsi));
