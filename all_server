@@ -48,6 +48,8 @@ void error_handling(char* message)
 	exit(1);
 }
 
+
+
 pid_t pid_child;
 int server_socket;
 int pipeline[2];
@@ -137,7 +139,6 @@ void* fuel_th(void* empty){
     char msgimsi[BUFF_SIZE];
     char numimsi[BUFF_SIZE];
     memset(msgimsi,0,sizeof(msgimsi));
-    printf("%s")
     while(!strcmp(state_engine,"turn_on"))
     {
       sleep(10);
@@ -149,19 +150,6 @@ void* fuel_th(void* empty){
       sprintf(numimsi, "%08d", fuel);
       write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
     }
-  }
-}
-void* fuel_transfer(void* empty)
-{
-  char msgimsi[BUFF_SIZE];
-  memset(msgimsi,0,sizeof(msgimsi));
-  if(!strcmp("fuel_charge",state_fuel_charge))
-  {
-    strcpy(state_fuel_charge,"nocharge");
-    strcpy(msgimsi,"fuel0000");
-    write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
-    fuel = 100;
-    printf("연료 충전 발신 메세지 : %s\n",msgimsi);
   }
 }
 
