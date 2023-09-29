@@ -50,9 +50,6 @@ def client(form):
         return
     else:
         print("접속 완료")
-        
-    
-    form.setMsg("server 접속 완료", True)
 
     # msg = "conn_ui\x00"
     # client_socket.send(msg.encode())
@@ -95,9 +92,6 @@ def client2(form):
         return
     else:
         print("접속 완료2")
-        
-    
-    form.setMsg("server 접속 완료2", True)
 
     # msg = "conn_ui\x00"
     # client_socket.send(msg.encode())
@@ -273,7 +267,30 @@ class Form(QtWidgets.QMainWindow):
         print(signo)
         if signo == "charge":
             self.ui.fuelbar.setValue(100)
+            self.ui.fuelmsg.setText("주유 완료")
+            self.ui.fuelmsg.setStyleSheet("Color : black")
+            self.msg.setText("-")
         else:
+            if int(signo) <= 10:
+                self.fuelmsg.setText("연료 부족")
+                self.fuelmsg.setStyleSheet("Color : red")
+                if int(signo) <= 1:
+                    self.ui.fuelmsg.setText("운행 불가")
+                    self.ui.fuelmsg.setStyleSheet("Color : red")
+                    self.ui.system.setChecked(False)
+                    self.msg.setText("연료가 부족하여 종료합니다")
+                    self.ui.fuelmsg.setStyleSheet("Color : red")
+                    self.ui.accel.setEnabled(False)
+                    self.ui.brake.setEnabled(False)
+                    self.ui.lh.setEnabled(False)
+                    self.ui.rh.setEnabled(False)
+                    self.rotatetarget = 0
+                    msg = "turn_off\x00"
+                    client_socket.send(msg.encode())
+                    
+            else:
+                self.fuelmsg.setText("-")
+                self.ui.fuelmsg.setStyleSheet("Color : black")
             self.ui.fuelbar.setValue(int(signo))
 
     def start_timer(self, signo):
