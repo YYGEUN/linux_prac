@@ -23,13 +23,17 @@ doAcc = False
 doBrk = False
 curSpeed = 0
 
+HOST = '192.168.15.158' # 카페
+# HOST = '192.168.50.31' # loopback # 교육장
+
 client_socket = None
 
 sockMode = True
 
 def client(form):
-    # HOST = '192.168.50.31' # loopback
-    HOST = '172.30.1.93'
+    # HOST = '192.168.50.31' # loopback # 교육장
+    # HOST = '172.30.1.93' #집
+    # HOST = '127.0.0.1'
     PORT = portnum
     global client_socket
     
@@ -71,7 +75,7 @@ def client(form):
 
 def client2(form):
     # HOST = '192.168.50.31' # loopback
-    HOST = '172.30.1.93'
+    # HOST = '172.30.1.93'
     PORT = portnum
     global client_socket2
     
