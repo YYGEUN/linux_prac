@@ -18,28 +18,47 @@
 #include <signal.h>
 #include <time.h> //C언어
 
+// 기본 설정
 #define NUM_SEM	 1
 #define MAXLINE 1024
+#define BUFF_SIZE 128
+
+pid_t pid_child;
+int pipeline[2];
+int sem_id;
+int ret;
+int status;
+int n; //pyqt에서 읽어오는 크기값지정
 
 // 속도 관련
 #define MAXSPEED 230
 #define MINSPEED 3
 #define SPEEDCHANGE_V 3
-#define BUFF_SIZE 128
+#define SPEEDCHANGE_NONE_V 1
 
-// 
+// 소켓 , 쓰레드 관련
 #define TH_COUNT 5
 #define TH_SPEED 0
 #define TH_MESG_SIGNAL 1
 #define TH_MESG_FUEL 2
 #define MAX_LISTEN_COUNT 5
 #define PORT_1 5005
-
 #define CONNECTCLIENT 2
-#define SOCKET_1_SPEED_IDX 0
-#define SOCKET_2_MESG_IDX 1
+#define SOCKET_1_SPEED_IDX 0 //속도값
+#define SOCKET_2_MESG_IDX 1 //메세지 + 연료령
 
-// 192.168.50.31
+int server_socket;
+int client_count = 0,thread_count = 0;
+int client_sockets[CONNECTCLIENT];
+pthread_t p_thread[TH_COUNT];
+
+// 상태값
+int fuel,speed=0,number=0;
+char state_engine[BUFF_SIZE];
+char state_acbr[BUFF_SIZE];
+char state_turnsignal[BUFF_SIZE];
+char state_speed[BUFF_SIZE];
+char state_fuel_charge[BUFF_SIZE];
 
 void error_handling(char* message)
 {
@@ -47,31 +66,6 @@ void error_handling(char* message)
 	fputc('\n',stderr);
 	exit(1);
 }
-
-
-
-pid_t pid_child;
-int server_socket;
-int pipeline[2];
-int client_count = 0,thread_count = 0;
-int client_sockets[CONNECTCLIENT];
-pthread_t p_thread[TH_COUNT];
-int fuel;
-int total_speed=0;
-char state_engine[BUFF_SIZE];
-char state_acbr[BUFF_SIZE];
-char state_turnsignal[BUFF_SIZE];
-char state_speed[BUFF_SIZE];
-char state_fuel_charge[BUFF_SIZE];
-int ac=0;
-int br=0;
-int speed = 0; 
-int number = 0;
-int n;
-int sem_id;
-int ret;
-int status;
-int exit_flag = 0;
 
 static int init_semaphore(void)
 {
@@ -112,13 +106,13 @@ static int sem_sysv_release(int sem_id)
 }
 
 void increase_speed() {
-    speed += 3;
+    speed += SPEEDCHANGE_V;
 }
-void decrease_speed() {
-    speed -= 1;
+void decrease_speed_NONE() {
+    speed -= SPEEDCHANGE_NONE_V;
 }
-void decrease_speed2() {
-    speed -= 3;
+void decrease_speed_BRAKE() {
+    speed -= SPEEDCHANGE_V;
 }
 
 void* fuel_charge(void* empty)
@@ -318,12 +312,12 @@ void* speedcalc_th(void* empty){
 		}
 		if(strcmp(state_acbr,"brin") == 0)
 		{
-			if(speed > 0) decrease_speed2();
+			if(speed > 0) decrease_speed_BRAKE();
       if(speed < 0) speed = 0;
 		}
 		if(strcmp(state_acbr,"nope") == 0)
 		{
-			if(speed > 0) decrease_speed();
+			if(speed > 0) decrease_speed_NONE();
       if(speed < 0) speed = 0;
     }
 
@@ -425,6 +419,7 @@ int main(int argc, char *argv[]) {
 
     while(read(pipeline[0],state_acbr,sizeof(state_acbr))>0)
     {
+      number ++;
       file_process_write("log.txt");
     }
     close(pipeline[0]);
