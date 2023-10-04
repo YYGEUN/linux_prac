@@ -137,6 +137,10 @@ void* fuel_th(void* empty){
     while(!strcmp(state_engine,"turn_on"))
     {
       sleep(10);
+      if(!strcmp(state_engine,"turn_off"));
+      {
+        break;
+      }
       if(fuel > 0)
       {
         fuel -= 1;
@@ -234,6 +238,10 @@ void* turnsignal_th(void* empty){
           strcpy(msgimsi,"left0000");
           write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
           printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+
+          memset(msgimsi,0,sizeof(msgimsi));
+          strcpy(msgimsi,"right111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
         }
         else if(strcmp(state_turnsignal,"left_off") == 0)
         {
@@ -246,6 +254,10 @@ void* turnsignal_th(void* empty){
           strcpy(msgimsi,"right000");
           write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
           printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+
+          memset(msgimsi,0,sizeof(msgimsi));
+          strcpy(msgimsi,"left1111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
         }
         else if(strcmp(state_turnsignal,"right_off") == 0)
         {
@@ -292,6 +304,10 @@ void* sock_recv_fn_th(void* clnt_sock){
     {      
       memcpy(state_engine, imsi, sizeof(imsi));
       printf("엔진 상태 수신 메세지 : %s\n",state_engine);
+      if(!strcmp(state_engine,"turn_off")){
+        file_process_write("fuel.txt");
+        printf("시동종료 - 연료저장\n");
+      }
     }
 
     write(pipeline[1],imsi,sizeof(imsi));
@@ -379,10 +395,6 @@ void siginthandler(int _signo) {
       printf("child kill failed\n");
   }
 
-
-  for(int i = 0; i < TH_COUNT; i++) {
-    pthread_join(p_thread[i],(void **)&status);
-  }
   for(int i = 0; i < client_count; i++) {
     close(client_sockets[i]);
   }
@@ -392,6 +404,7 @@ void siginthandler(int _signo) {
   printf("clean up done\n");
 
   file_process_write("fuel.txt");
+  printf("연료량 저장완료\n");
 
   exit(0);
 }
@@ -486,11 +499,15 @@ int main(int argc, char *argv[]) {
   for(int i = 0; i < TH_COUNT; i++) {
     pthread_join(p_thread[i],(void **)&status);
   }
+
   for(int i = 0; i < client_count; i++) {
     close(client_sockets[i]);
   }
+  printf("clean up done\n");
 
   file_process_write("fuel.txt");
+
+  printf("연료량 저장완료\n");
 
   semctl(sem_id, 0, IPC_RMID);
   close(server_socket);
