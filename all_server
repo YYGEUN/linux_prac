@@ -45,7 +45,7 @@ int n; //pyqt에서 읽어오는 크기값지정
 #define PORT_1 5005
 #define CONNECTCLIENT 2
 #define SOCKET_1_SPEED_IDX 0 //속도값
-#define SOCKET_2_MESG_IDX 1 //메세지 + 연료령
+#define SOCKET_2_MESG_IDX 1 //메세지 + 연료량
 
 int server_socket;
 int client_count = 0,thread_count = 0;
@@ -59,6 +59,7 @@ char state_acbr[BUFF_SIZE];
 char state_turnsignal[BUFF_SIZE];
 char state_speed[BUFF_SIZE];
 char state_fuel_charge[BUFF_SIZE];
+char state_from_pyqt5[BUFF_SIZE];
 
 void error_handling(char* message)
 {
@@ -175,7 +176,7 @@ void file_process_write(char type[])
   else
   {
     fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
-    fprintf(fdfile, "%d번째 명령어 : %s\n",number,state_acbr);
+    fprintf(fdfile, "%d번째 명령어 : %s\n",number,state_from_pyqt5);
   }
 
   sem_sysv_release(sem_id);
@@ -378,6 +379,10 @@ void siginthandler(int _signo) {
       printf("child kill failed\n");
   }
 
+
+  for(int i = 0; i < TH_COUNT; i++) {
+    pthread_join(p_thread[i],(void **)&status);
+  }
   for(int i = 0; i < client_count; i++) {
     close(client_sockets[i]);
   }
@@ -417,7 +422,7 @@ int main(int argc, char *argv[]) {
     printf("child created (%d)\n", getpid());
     close(pipeline[1]);
 
-    while(read(pipeline[0],state_acbr,sizeof(state_acbr))>0)
+    while(read(pipeline[0],state_from_pyqt5,sizeof(state_from_pyqt5))>0)
     {
       number ++;
       file_process_write("log.txt");
