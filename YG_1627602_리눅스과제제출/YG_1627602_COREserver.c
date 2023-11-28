@@ -1,0 +1,521 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/procfs.h>
+#include <sys/sem.h>
+#include <arpa/inet.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <pthread.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <time.h> //C언어
+
+// 기본 설정
+#define NUM_SEM	 1
+#define MAXLINE 1024
+#define BUFF_SIZE 128
+
+pid_t pid_child;
+int pipeline[2];
+int sem_id;
+int ret;
+int status;
+int n; //pyqt에서 읽어오는 크기값지정
+
+// 속도 관련
+#define MAXSPEED 230
+#define MINSPEED 3
+#define SPEEDCHANGE_V 3
+#define SPEEDCHANGE_NONE_V 1
+
+// 소켓 , 쓰레드 관련
+#define TH_COUNT 5
+#define TH_SPEED 0
+#define TH_MESG_SIGNAL 1
+#define TH_MESG_FUEL 2
+#define MAX_LISTEN_COUNT 5
+#define PORT_1 5005
+#define CONNECTCLIENT 2
+#define SOCKET_1_SPEED_IDX 0 //속도값
+#define SOCKET_2_MESG_IDX 1 //메세지 + 연료량
+
+int server_socket;
+int client_count = 0,thread_count = 0;
+int client_sockets[CONNECTCLIENT];
+pthread_t p_thread[TH_COUNT];
+
+// 상태값
+int fuel,speed=0,number=0;
+char state_engine[BUFF_SIZE];
+char state_acbr[BUFF_SIZE];
+char state_turnsignal[BUFF_SIZE];
+char state_speed[BUFF_SIZE];
+char state_fuel_charge[BUFF_SIZE];
+char state_from_pyqt5[BUFF_SIZE];
+
+void error_handling(char* message)
+{
+	fputs(message,stderr);
+	fputc('\n',stderr);
+	exit(1);
+}
+
+static int init_semaphore(void)
+{
+	key_t key = 7000;
+	int semid;
+	semid = semget(key, NUM_SEM, IPC_CREAT | 0666);
+	if (semid == -1) {
+		perror("semget()");
+		return -1;
+	}
+
+	return semid;
+}
+static int sem_sysv_init(int sem_id)
+{
+	semctl(sem_id, 0, SETVAL, 1);	/* binary semaphore */
+	return 0;
+}
+static int sem_sysv_get(int sem_id)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_op = -1;
+	semop(sem_id, &buf, 1);
+
+	return 0;
+}
+static int sem_sysv_release(int sem_id)
+{
+	struct sembuf buf;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.sem_op = 1;
+	semop(sem_id, &buf, 1);
+
+	return 0;
+}
+
+void increase_speed() {
+    speed += SPEEDCHANGE_V;
+}
+void decrease_speed_NONE() {
+    speed -= SPEEDCHANGE_NONE_V;
+}
+void decrease_speed_BRAKE() {
+    speed -= SPEEDCHANGE_V;
+}
+
+void* fuel_charge(void* empty)
+{
+  char msgimsi[BUFF_SIZE];
+  memset(msgimsi,0,sizeof(msgimsi));
+  if(!strcmp("fuel_charge",state_fuel_charge))
+  {
+    strcpy(state_fuel_charge,"nocharge");
+    strcpy(msgimsi,"fuel0000");
+    write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
+    fuel = 100;
+    printf("연료 충전 발신 메세지 : %s\n",msgimsi);
+  }
+}
+void* fuel_th(void* empty){
+	while(1){
+    char msgimsi[BUFF_SIZE];
+    char numimsi[BUFF_SIZE];
+    memset(msgimsi,0,sizeof(msgimsi));
+    while(!strcmp(state_engine,"turn_on"))
+    {
+      memcpy(msgimsi,state_engine,sizeof(state_engine));
+      sleep(10);
+      if(strcmp(state_engine,msgimsi))
+      {
+        // 시동종료시 연료 보존
+        break;
+      }
+      if(fuel > 1 && !strcmp(state_acbr,"acin"))
+      {
+        //가속 상태
+        fuel -= 2;
+      }
+      else if(fuel > 0)
+      {
+        //가속 이외상태
+        fuel -= 1;
+      }
+      printf("현재 연료량 : %d\n", fuel);
+      sprintf(numimsi, "%08d", fuel);
+      write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
+    }
+  }
+}
+
+void file_process_write(char type[])
+{
+  time_t timer;
+  struct tm* t;
+  timer = time(NULL);
+  t = localtime(&timer);
+
+  sem_sysv_get(sem_id);
+
+  int fd;
+  fd=open(type,O_CREAT|O_RDWR|O_APPEND, 0666);     
+  if(fd<0){                 
+    perror("file open error\n");  
+    return;                   
+  }    
+  FILE *fdfile = fdopen(fd,"w");
+  if (fdfile == NULL) {
+    perror("write fdopen error");
+    return;
+  }
+
+  if(!strcmp(type,"fuel.txt"))
+  {
+    fprintf(fdfile, "%d\n",fuel);
+  }
+  else
+  {
+    fprintf(fdfile, "현재시간 : %d시 %d분 %d초\n", t->tm_hour,t->tm_min,t->tm_sec);
+    fprintf(fdfile, "%d번째 명령어 : %s\n",number,state_from_pyqt5);
+  }
+
+  sem_sysv_release(sem_id);
+
+  fclose(fdfile);
+  close(fd);
+}
+void file_process_read(char type[])
+{
+  sem_sysv_get(sem_id);
+
+  int fd;
+  fd = open(type, O_RDONLY);
+  char numimsi[BUFF_SIZE];
+  if(fd<0){                 
+    printf("저장된 자료가없습니다. 연료를 100으로 시작합니다\n");
+    fuel = 100;
+    sprintf(numimsi, "%08d", fuel);
+    write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
+    return;                   
+  }    
+  FILE *fdfile = fdopen(fd,"r");
+  if (fdfile == NULL) {
+    perror("write fdopen error");
+    return;
+  }
+
+  char imsi[BUFF_SIZE];
+  while (fgets(imsi, sizeof(imsi), fdfile) != NULL) {
+      fuel = atoi(imsi);
+  }
+
+  sprintf(numimsi, "%08d", fuel);
+  write(client_sockets[SOCKET_2_MESG_IDX],numimsi,8);
+
+  sem_sysv_release(sem_id);
+
+  fclose(fdfile);
+  close(fd);
+}
+
+void* turnsignal_th(void* empty){
+  char pre_state_signal[BUFF_SIZE];
+  strcpy(pre_state_signal,"rrrrllll");
+	while(1){
+    char msgimsi[BUFF_SIZE];
+    memset(msgimsi,0,sizeof(msgimsi));
+    if(!strcmp("left_on",state_turnsignal) || !strcmp("left_off",state_turnsignal) ||!strcmp("right_off",state_turnsignal) ||!strcmp("right_on",state_turnsignal))
+    {
+      if(strcmp(pre_state_signal,state_turnsignal))
+      {
+        strcpy(pre_state_signal,state_turnsignal);
+        if(strcmp(state_turnsignal,"left_on") == 0)
+        {
+          strcpy(msgimsi,"left0000");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+
+          memset(msgimsi,0,sizeof(msgimsi));
+          strcpy(msgimsi,"right111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+        }
+        else if(strcmp(state_turnsignal,"left_off") == 0)
+        {
+          strcpy(msgimsi,"left1111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+        else if(strcmp(state_turnsignal,"right_on") == 0)
+        {
+          strcpy(msgimsi,"right000");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+
+          memset(msgimsi,0,sizeof(msgimsi));
+          strcpy(msgimsi,"left1111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+        }
+        else if(strcmp(state_turnsignal,"right_off") == 0)
+        {
+          strcpy(msgimsi,"right111");
+          write(client_sockets[SOCKET_2_MESG_IDX], msgimsi, 8);
+          printf("시그널 상태 발신 메세지 : %s\n",msgimsi);
+        }
+      }
+    }
+  }
+}
+
+void* sock_recv_fn_th(void* clnt_sock){
+	int socketfd =*(int*)clnt_sock;
+  char imsi[BUFF_SIZE];
+  char numimsi[BUFF_SIZE];
+  while (1)
+  {
+    memset(imsi,0,sizeof(imsi));
+    n = read(socketfd,imsi,sizeof(imsi));
+    if(n <= 0) {
+      perror("socket error\n");
+      break;
+    }
+
+    if(!strcmp(imsi,"acin") || !strcmp(imsi,"nope") ||!strcmp(imsi,"brin"))
+    {
+      memcpy(state_acbr, imsi, sizeof(imsi));
+      printf("속도 상태 수신 메세지 : %s\n",imsi);
+    }
+    if(!strcmp(imsi,"left_on") || !strcmp(imsi,"right_on") ||!strcmp(imsi,"left_off") || !strcmp(imsi,"right_off"))
+    {
+      memcpy(state_turnsignal, imsi, sizeof(imsi));
+      printf("시그널 상태 수신 메세지 : %s\n",imsi);
+    }
+    if(!strcmp(imsi,"fuel_charge"))
+    {
+      memcpy(state_fuel_charge, imsi, sizeof(imsi));
+      printf("연료 상태 수신 메세지 : %s\n",imsi);
+      fuel_charge(NULL);
+    }
+    if(!strcmp(imsi,"turn_on") || !strcmp(imsi,"turn_off"))
+    {      
+      memcpy(state_engine, imsi, sizeof(imsi));
+      printf("엔진 상태 수신 메세지 : %s\n",state_engine);
+      if(!strcmp(state_engine,"turn_off")){
+        file_process_write("fuel.txt");
+        printf("시동종료 - 연료저장\n");
+        speed = 0;
+      }
+    }
+
+    write(pipeline[1],imsi,sizeof(imsi));
+  }  
+}
+
+void* speedcalc_th(void* empty){
+  int preSendedValue = 0;
+  char pre_state_speed[BUFF_SIZE];
+  strcpy(pre_state_speed,"none");
+	while(1)
+	{
+    usleep(100*1000);
+		if(strcmp(state_acbr,"acin") == 0)
+		{
+      if(speed < MAXSPEED) increase_speed();
+		}
+		if(strcmp(state_acbr,"brin") == 0)
+		{
+			if(speed > 0) decrease_speed_BRAKE();
+      if(speed < 0) speed = 0;
+		}
+		if(strcmp(state_acbr,"nope") == 0)
+		{
+			if(speed > 0) decrease_speed_NONE();
+      if(speed < 0) speed = 0;
+    }
+
+    if(preSendedValue != speed) {
+      preSendedValue = speed;
+      printf("현재속도 : %d\n",speed);
+      char imsi[BUFF_SIZE];
+      sprintf(imsi, "%06d", speed);
+      // 속도 값 전달 to SOCKET_1_SPEED_IDX
+      if(speed >= 0 || speed < MAXSPEED) {
+        write(client_sockets[SOCKET_1_SPEED_IDX],imsi,6);
+      }
+
+      // 속도 상태 전달 to SOCKET_2_MESG_IDX
+      if(speed > 150)
+      {
+        strcpy(state_speed,"speedng0");
+      }
+      else if (speed > 0 && speed <= 150)
+      {
+        strcpy(state_speed,"speedok0");
+      }
+      else if (speed == 0)
+      {
+        strcpy(state_speed,"speed000");
+      }
+      if(strcmp(pre_state_speed,state_speed) != 0)
+      {
+        char msgimsi[BUFF_SIZE];
+        memset(msgimsi,0,sizeof(msgimsi));
+        strcpy(pre_state_speed,state_speed);
+        sprintf(msgimsi, "%s", state_speed);
+        write(client_sockets[SOCKET_2_MESG_IDX],msgimsi,8);
+        printf("속도 상태 발신 메세지 : %s\n",msgimsi);
+      }
+    }
+	}
+}
+
+void siginthandler(int _signo) {
+  printf("recved signal(%d)\n", _signo);
+
+  int killcounter = 0;
+  while(killcounter < 5) {
+    kill(pid_child, SIGINT);
+    printf("send sigint (to child)(%d, counter %d)\n", pid_child, killcounter);  
+    if(waitpid(pid_child, NULL, WNOHANG) == pid_child) {
+      // 정상 종료
+      printf("child killed done\n");
+      break; 
+    }
+    killcounter++;
+    sleep(1);
+  }
+
+  if(killcounter >= 5) {
+      printf("child kill failed\n");
+  }
+
+  for(int i = 0; i < client_count; i++) {
+    close(client_sockets[i]);
+  }
+
+  semctl(sem_id, 0, IPC_RMID);
+  close(server_socket);
+  printf("clean up done\n");
+
+  file_process_write("fuel.txt");
+  printf("연료량 저장완료\n");
+
+  exit(0);
+}
+
+int main(int argc, char *argv[]) {
+  socklen_t addrlen,addrlen2;
+  int status,fd;
+  char buf[MAXLINE];
+  char msg1[MAXLINE];
+  struct sockaddr_in client_addr,server_addr;	
+
+  sem_id = init_semaphore();
+  sem_sysv_init(sem_id);
+
+	if (pipe(pipeline)) {
+		perror("pipe()");
+		return -1;
+	}
+
+  printf("parent (%d)\n", getpid());
+  pid_child = fork();
+
+  if(pid_child < 0) {
+    perror("forkerror");
+    return -1;
+  }
+  else if(pid_child == 0) {
+    printf("child created (%d)\n", getpid());
+    close(pipeline[1]);
+
+    while(read(pipeline[0],state_from_pyqt5,sizeof(state_from_pyqt5))>0)
+    {
+      number ++;
+      file_process_write("log.txt");
+    }
+    close(pipeline[0]);
+    return 0;
+  }
+
+  // parent
+  signal(SIGINT, siginthandler);
+  close(pipeline[0]);
+
+  if((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+      return 1;
+  if(server_socket==-1){
+    perror("socket() error");	
+  }
+  memset((void *)&server_addr, 0, sizeof(server_addr));
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  server_addr.sin_port = htons(PORT_1);
+  int optval = 1;
+
+  setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
+  if(bind(server_socket,(struct sockaddr*) &server_addr,sizeof(server_addr))==-1){
+    perror("bind() error");
+  }
+
+  if(listen(server_socket, MAX_LISTEN_COUNT) == -1) {
+    perror("listen error");
+      return 1;
+  }
+  printf("신호대기중 .....\n");
+
+  // 상시쓰레드
+  pthread_create(&p_thread[TH_SPEED], NULL, speedcalc_th, NULL);
+  thread_count ++;
+  pthread_create(&p_thread[TH_MESG_SIGNAL], NULL, turnsignal_th, NULL);
+  thread_count ++;
+  pthread_create(&p_thread[TH_MESG_FUEL], NULL, fuel_th, NULL);
+  thread_count ++;
+
+  while(client_count < 2)
+  {
+    addrlen = sizeof(client_addr);      
+    client_sockets[client_count] = accept(server_socket, (struct sockaddr*)&client_addr, &addrlen);
+    if(client_sockets[client_count] == -1) {
+      perror("accept error\n");
+    }
+
+    printf("--------------------- connected client : %d ------------------------\n",client_count);
+
+    pthread_create(&p_thread[thread_count+client_count],NULL, sock_recv_fn_th,(void*)&client_sockets[client_count]);
+    client_count++;
+  }
+
+  file_process_read("fuel.txt");
+  printf("이전 연료량은 %d 입니다\n",fuel);
+
+  for(int i = 0; i < TH_COUNT; i++) {
+    pthread_join(p_thread[i],(void **)&status);
+  }
+
+  for(int i = 0; i < client_count; i++) {
+    close(client_sockets[i]);
+  }
+  printf("clean up done\n");
+
+  file_process_write("fuel.txt");
+  printf("연료량 저장완료\n");
+
+  semctl(sem_id, 0, IPC_RMID);
+  close(server_socket);
+  wait(NULL);
+  
+  return 0;
+}
