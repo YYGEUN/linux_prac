@@ -1,0 +1,32 @@
+#include <stdio.h>
+#include <unistd.h>
+#include <wait.h> // 자식 프로세스 종료를 기다리는 함수인 wait사용하기 위해 인크루드
+#include <signal.h>
+
+int gChildID = 0; // 전역변수
+
+void sigAlarmHandler(int _signo) {
+  printf("recv sigalrm\n");
+  kill(gChildID, SIGQUIT);
+}
+
+int main(void) {
+  gChildID = fork();
+  if(gChildID == 0) {
+    // child
+    execl("/home/class/workspace/code/3day/child.out", "child", NULL);
+    return -1; // execl 실패했을 경우를 대비해서
+  }
+  else {
+    // parent
+    alarm(10);
+    signal(SIGALRM, sigAlarmHandler);
+    int status;
+    wait(&status); // child가 종료될때까지 blocking으로 대기 <-------------
+    int exitcode = status >> 8; // return , exit(), _exit()
+    int signalcode = status &= 0xff; // signal 
+
+    printf("exitcode: %d, signalcode: %d\n", exitcode, signalcode);
+    printf("done\n");
+  }
+}

@@ -1,0 +1,28 @@
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+
+int total_sum = 0;
+int user_input_count = 0;
+
+void signal_handler(int _signo) {
+    printf("\n[Result] %d\n", _signo);
+    printf("Count %d, Result %d\n", user_input_count, total_sum);
+    if(_signo == SIGALRM) {
+      alarm(5);
+    }
+}
+
+int main(void) {
+  int user_num = 0;
+  signal(SIGALRM, signal_handler);
+  signal(SIGTSTP, signal_handler);
+  alarm(5);
+
+  while(1) {
+    printf("enter number: ");
+    scanf(" %d", &user_num);
+    total_sum = total_sum + user_num;
+    user_input_count++;
+  }
+}

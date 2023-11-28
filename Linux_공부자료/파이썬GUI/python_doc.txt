@@ -1,0 +1,4 @@
+https://docs.python.org/ko/3.11/search.html?q=
+
+QT위젯 문서
+https://doc.qt.io/qt-5/qtwidgets-module.html

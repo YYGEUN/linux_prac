@@ -1,0 +1,49 @@
+#include <stdio.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <sys/sem.h>
+#include <stdint.h>
+#include <unistd.h>
+
+unsigned int total_count = 0;   // 카운트 전역변수
+struct sembuf mysem_p  = {0, -1, SEM_UNDO};
+struct sembuf mysem_v  = {0, 1, SEM_UNDO};
+sem_t mysem;
+
+int n_start = 0;
+void *func_sem(void *param)
+{
+  int thread_no = (intptr_t)param;
+  while(n_start == 0) {
+  }
+
+  for (int i = 0; i < 100000; i++) {
+    sem_wait(&mysem); //<--
+    total_count = total_count + 1;
+    printf("id:%d, value:%d\n", thread_no, total_count);
+    sem_post(&mysem); //<--
+  }
+  return 0;
+}
+
+int main()
+{
+  pthread_t th[5];
+  if (sem_init(&mysem, 0, 1) == -1) { 
+    perror("Error");
+    return 0; 
+  } 
+  pthread_create(&th[0], NULL, func_sem, (void *)1);
+  pthread_create(&th[1], NULL, func_sem, (void *)2);
+  pthread_create(&th[2], NULL, func_sem, (void *)3);
+  pthread_create(&th[3], NULL, func_sem, (void *)4);
+  pthread_create(&th[4], NULL, func_sem, (void *)5);
+  sleep(2);
+  n_start = 1;
+  for (int i = 0; i < 5; i++) {
+      pthread_join(th[i], NULL);
+  }
+  
+  sem_destroy(&mysem);  
+  return 0;
+}

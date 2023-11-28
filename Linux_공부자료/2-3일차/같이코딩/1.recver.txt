@@ -1,0 +1,19 @@
+#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
+
+void signal_handler(int _signal_no) {
+  printf("%d recved signal", _signal_no);
+}
+
+int main(void) {
+   printf("started pid = %d\n", getpid());
+   signal(SIGINT, signal_handler);
+   signal(SIGUSR1, signal_handler);
+   signal(SIGUSR2, signal_handler); // 등록완료시 0, 에러시 -1
+   // SIGKILL ret -1 (SIG_ERR)
+   while(1) {
+    printf("alive......\n");
+    sleep(1);
+   }
+}
